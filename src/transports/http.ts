@@ -42,14 +42,16 @@ app.get("/tools", (_req, res) => {
 });
 
 // Streamable HTTP (Open WebUI native, recommended) — https://docs.openwebui.com/features/extensibility/mcp/
-app.all("/mcp", async (req, res) => {
+async function handleMcp(req: express.Request, res: express.Response) {
   const userId = extractUserIdFromHeaders(req.headers as any, (req.query as any)?.user_id);
   const server = createMcpServer();
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   res.on("close", () => transport.close());
   await server.connect(transport);
   await requestContext.run({ userId }, () => transport.handleRequest(req, res, req.body));
-});
+}
+app.post("/mcp", handleMcp);
+app.get("/mcp", handleMcp);
 
 // SSE transport for MCP — per-session map to avoid race (legacy, keep for compat)
 const sseTransports = new Map<string, SSEServerTransport>();
@@ -67,7 +69,8 @@ app.post("/messages", async (req, res) => {
   const sessionId = req.query.sessionId as string;
   const transport = sessionId ? sseTransports.get(sessionId) : [...sseTransports.values()][0];
   if (transport) {
-    const userId = (transport as any)._userId ?? extractUserIdFromHeaders(req.headers as any);
+    const headerUser = extractUserIdFromHeaders(req.headers as any);
+    const userId = headerUser !== "anonymous" ? headerUser : (transport as any)._userId ?? "anonymous";
     await requestContext.run({ userId }, () => transport.handlePostMessage(req, res, req.body));
   } else res.status(404).end();
 });

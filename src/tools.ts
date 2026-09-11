@@ -3,7 +3,6 @@ import { getDb } from "./db.js";
 import { embed } from "./embed.js";
 import { randomUUID } from "node:crypto";
 import { getCurrentUserId } from "./context.js";
-// PATCH TEST
 
 // Tool definitions — stubbed for scaffold, real logic in later tickets.
 // Each tool validates via zod and returns structured result.

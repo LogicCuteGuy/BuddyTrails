@@ -422,6 +422,29 @@ export function initSchema(db: Db): void {
     `UPDATE pomodoro_sessions SET user_id='local' WHERE user_id IS NULL`,
     `UPDATE conversation_settings SET user_id='local' WHERE user_id IS NULL`,
   ]) { try { db.exec(sql); } catch {} }
+  // Fix conversation_settings PK for existing DBs: old schema had PRIMARY KEY(conversation_id) only.
+  // New schema needs PRIMARY KEY(user_id, conversation_id) to allow same conversation_id per user.
+  // Detect old PK and migrate via table recreate.
+  try {
+    const cols = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='conversation_settings'`).get() as any;
+    const createSql: string = cols?.sql ?? "";
+    const hasCompositePk = createSql.includes("PRIMARY KEY (user_id, conversation_id)") || createSql.includes("PRIMARY KEY(user_id, conversation_id)");
+    if (!hasCompositePk && createSql.includes("conversation_settings")) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS conversation_settings_new (
+          conversation_id TEXT NOT NULL,
+          user_id TEXT NOT NULL DEFAULT 'local',
+          opt_out INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (user_id, conversation_id)
+        );
+        INSERT OR IGNORE INTO conversation_settings_new (conversation_id, user_id, opt_out, created_at)
+          SELECT conversation_id, COALESCE(user_id, 'local'), opt_out, created_at FROM conversation_settings;
+        DROP TABLE conversation_settings;
+        ALTER TABLE conversation_settings_new RENAME TO conversation_settings;
+      `);
+    }
+  } catch {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_ideas_user ON ideas(user_id)`); } catch {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id)`); } catch {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_user_deadline ON tasks(user_id, deadline)`); } catch {}

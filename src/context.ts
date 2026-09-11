@@ -13,8 +13,9 @@ export function runWithUser<T>(userId: string, fn: () => T): T {
 }
 
 export function extractUserIdFromHeaders(headers: Record<string, any>, bodyUserId?: string): string {
+  // Express lowercases all header names, so check lowercase only.
   const h = (name: string) => {
-    const v = headers[name] ?? headers[name.toLowerCase()] ?? headers[name.toUpperCase()];
+    const v = headers[name.toLowerCase()];
     return typeof v === "string" ? v.trim() : "";
   };
   return (
