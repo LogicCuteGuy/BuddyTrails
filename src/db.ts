@@ -19,7 +19,7 @@ export function getDbPath(): string {
 class MemDb implements Db {
   tables: Map<string, Map<string, any>> = new Map();
   constructor(_path: string) {
-    for (const t of ["knowledge_entries","ideas","tasks","raw_task_items","reminders","pomodoro_sessions"]) {
+    for (const t of ["knowledge_entries","ideas","tasks","raw_task_items","reminders","pomodoro_sessions","conversation_settings"]) {
       this.tables.set(t, new Map());
     }
   }
@@ -45,7 +45,7 @@ class MemDb implements Db {
           const cols = colsMatch ? colsMatch[1].split(",").map(s=>s.trim()) : [];
           const row: any = {};
           cols.forEach((c,i)=> row[c]=vals[i]);
-          const key = row.id || row.temp_id || String(Math.random());
+          const key = row.id || row.temp_id || row.conversation_id || String(Math.random());
           map.set(key, row);
           return { changes: 1 };
         }
@@ -81,6 +81,9 @@ class MemDb implements Db {
           const m = sql.match(/FROM\s+(\w+)/i);
           const tbl = m![1];
           return self.tables.get(tbl)?.get(vals[0]) || undefined;
+        }
+        if (/FROM conversation_settings WHERE conversation_id/i.test(sql)) {
+          return self.tables.get("conversation_settings")?.get(vals[0]) || undefined;
         }
         if (/SELECT raw_text FROM raw_task_items WHERE temp_id/i.test(sql)) {
           return self.tables.get("raw_task_items")?.get(vals[0]) || undefined;
@@ -257,6 +260,6 @@ export function initSchema(db: Db): void {
 }
 
 export function resetDb(db: Db): void {
-  db.exec(`DELETE FROM knowledge_entries; DELETE FROM ideas; DELETE FROM tasks; DELETE FROM raw_task_items; DELETE FROM reminders; DELETE FROM pomodoro_sessions;`);
+  db.exec(`DELETE FROM knowledge_entries; DELETE FROM ideas; DELETE FROM tasks; DELETE FROM raw_task_items; DELETE FROM reminders; DELETE FROM pomodoro_sessions; DELETE FROM conversation_settings;`);
   try { db.exec(`DELETE FROM knowledge_vec; DELETE FROM ideas_vec;`); } catch {}
 }
