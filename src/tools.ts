@@ -18,6 +18,83 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+// Calendar Block helpers
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const TIME_RE = /^\d{2}:\d{2}$/;
+
+function isValidDate(s: string): boolean {
+  if (!DATE_RE.test(s)) return false;
+  const d = new Date(s + "T00:00:00.000Z");
+  return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+function isValidDateMsg(s: string): string | null {
+  if (!DATE_RE.test(s)) return "must be YYYY-MM-DD";
+  const d = new Date(s + "T00:00:00.000Z");
+  if (isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s) return "is not a valid calendar date";
+  return null;
+}
+function isValidTime(s: string): boolean {
+  if (!TIME_RE.test(s)) return false;
+  const [h, m] = s.split(":").map(Number);
+  return h >= 0 && h <= 23 && m >= 0 && m <= 59;
+}
+function parseEffect(raw: any): { skip?: boolean; window?: { start: string; end: string }; boost_tags?: string[] } {
+  if (raw == null) return {};
+  if (typeof raw === "string") {
+    try { raw = JSON.parse(raw); } catch { return {}; }
+  }
+  if (typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: any = {};
+  if (typeof raw.skip === "boolean") out.skip = raw.skip;
+  if (raw.window && typeof raw.window === "object" && typeof raw.window.start === "string" && typeof raw.window.end === "string") {
+    out.window = { start: raw.window.start, end: raw.window.end };
+  }
+  if (Array.isArray(raw.boost_tags)) out.boost_tags = raw.boost_tags.filter((x: any) => typeof x === "string");
+  return out;
+}
+function validateCalendarBlock(input: { label: string; start_date: string; end_date: string; start_time?: string | null; end_time?: string | null; effect?: any }): string | null {
+  if (!input.label || typeof input.label !== "string" || input.label.trim().length === 0) return "label is required";
+  if (input.label.trim().length > 100) return "label must be 1..100 chars (trimmed)";
+  {
+    const m = isValidDateMsg(input.start_date);
+    if (m) return `start_date ${m}`;
+  }
+  {
+    const m = isValidDateMsg(input.end_date);
+    if (m) return `end_date ${m}`;
+  }
+  if (input.start_date > input.end_date) return "start_date must be <= end_date";
+  const hasStart = input.start_time != null && input.start_time !== "";
+  const hasEnd = input.end_time != null && input.end_time !== "";
+  if (hasStart !== hasEnd) return "start_time and end_time must both be provided or both omitted";
+  if (hasStart) {
+    if (!isValidTime(input.start_time!)) return "start_time must be HH:mm";
+    if (!isValidTime(input.end_time!)) return "end_time must be HH:mm";
+    if (input.start_time! >= input.end_time!) return "start_time must be < end_time";
+  }
+  const eff = parseEffect(input.effect);
+  if (eff.window) {
+    if (!isValidTime(eff.window.start)) return "effect.window.start must be HH:mm";
+    if (!isValidTime(eff.window.end)) return "effect.window.end must be HH:mm";
+    if (eff.window.start >= eff.window.end) return "effect.window.start must be < effect.window.end";
+  }
+  if (eff.boost_tags) {
+    if (eff.boost_tags.length > 20) return "effect.boost_tags max 20";
+    for (const t of eff.boost_tags) {
+      if (typeof t !== "string" || t.trim().length === 0 || t.length > 30) return "each boost_tag must be 1..30 chars";
+    }
+  }
+  // Strict: reject non-string boost_tags that were silently dropped by parseEffect
+  if (input.effect && Array.isArray((input.effect as any).boost_tags)) {
+    for (const t of (input.effect as any).boost_tags) {
+      if (typeof t !== "string") return "each boost_tag must be a string";
+    }
+  }
+  const hasEffect = !!(eff.skip || eff.window || (eff.boost_tags && eff.boost_tags.length > 0));
+  if (!hasEffect && !hasStart) return "effect or time required: provide effect.skip/window/boost_tags or start_time/end_time";
+  return null;
+}
+
 export const tools: ToolDef[] = [
   // knowledge.*
   {
@@ -630,6 +707,62 @@ export const tools: ToolDef[] = [
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
       db.prepare(`INSERT INTO link_codes (code, openwebui_user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`).run(code, userId, createdAt, expiresAt);
       return { code, openwebui_user_id: userId, expires_at: expiresAt, expires_in: "10m", next_step: "In Discord, run /buddytrails-verify code:<code> (works in DMs, no guild needed) to link your Discord account." };
+    },
+  },
+  // calendar.*
+  {
+    name: "calendar.set",
+    description: "Create a Calendar Block (flexible life period that modifies Work Schedule)",
+    inputSchema: z.object({
+      label: z.string().trim().min(1).max(100),
+      start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      // Semantic date/time validation (e.g. 2026-02-30, 24:00) is done in validateCalendarBlock
+      // so error messages are precise ("is not a valid calendar date" vs generic regex).
+      start_time: z.string().regex(/^\d{2}:\d{2}$/).optional().nullable(),
+      end_time: z.string().regex(/^\d{2}:\d{2}$/).optional().nullable(),
+      effect: z.object({
+        skip: z.boolean().optional(),
+        window: z.object({ start: z.string().regex(/^\d{2}:\d{2}$/), end: z.string().regex(/^\d{2}:\d{2}$/) }).optional(),
+        boost_tags: z.array(z.string().min(1).max(30)).max(20).optional(),
+      }).optional(),
+    }),
+    handler: async ({ label, start_date, end_date, start_time, end_time, effect }) => {
+      const userId = getCurrentUserId();
+      if (userId === "anonymous") throw new Error("Missing X-User-Id — calendar requires authentication");
+      const err = validateCalendarBlock({ label, start_date, end_date, start_time: start_time ?? null, end_time: end_time ?? null, effect });
+      if (err) throw new Error(err);
+      const db = getDb();
+      const id = randomUUID();
+      const effStr = JSON.stringify(parseEffect(effect ?? {}));
+      db.prepare(`INSERT INTO calendar_blocks (id, user_id, label, start_date, end_date, start_time, end_time, effect, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        id, userId, label.trim(), start_date, end_date, start_time ?? null, end_time ?? null, effStr, nowIso()
+      );
+      return { id, label: label.trim(), start_date, end_date, start_time: start_time ?? null, end_time: end_time ?? null, effect: JSON.parse(effStr) };
+    },
+  },
+  {
+    name: "calendar.list",
+    description: "List my Calendar Blocks",
+    inputSchema: z.object({}),
+    handler: async () => {
+      const userId = getCurrentUserId();
+      if (userId === "anonymous") throw new Error("Missing X-User-Id — calendar requires authentication");
+      const db = getDb();
+      const rows = db.prepare(`SELECT * FROM calendar_blocks WHERE user_id = ? ORDER BY start_date ASC, created_at ASC`).all(userId) as any[];
+      return { blocks: rows.map((r) => ({ ...r, effect: parseEffect(r.effect) })) };
+    },
+  },
+  {
+    name: "calendar.delete",
+    description: "Delete a Calendar Block",
+    inputSchema: z.object({ id: z.string().min(1) }),
+    handler: async ({ id }) => {
+      const userId = getCurrentUserId();
+      if (userId === "anonymous") throw new Error("Missing X-User-Id — calendar requires authentication");
+      const db = getDb();
+      db.prepare(`DELETE FROM calendar_blocks WHERE id = ? AND user_id = ?`).run(id, userId);
+      return { deleted: id };
     },
   },
   {

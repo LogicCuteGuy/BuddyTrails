@@ -41,6 +41,9 @@ Unenriched task input — just titles/descriptions pasted by the user, without p
 ### Work Schedule (Time Blocks)
 Time-blocked plan for today. Derived from Work Tasks filtered to `deadline == today` OR overdue `priority=3★`. Sorted by `priority ★★★ > ★★ > ★`, then `deadline`, then `estimate`. Packed into working window (default 09:00–18:00) with breaks; warns on overflow. Produced by `task.get_today_schedule`.
 
+### Calendar Block
+User-declared life period that modifies Work Schedule. Fields: `id, label (free text e.g. ปิดเทอม/สอบ/ไปค่าย), start_date, end_date (inclusive, YYYY-MM-DD), start_time?, end_time? (HH:mm daily window, null = whole day), effect {skip?, window?, boost_tags?}, user_id`. Private per Open WebUI User. Created via `calendar.*` tools or confirmed from natural language in `hook.on_turn`; `task.get_today_schedule` checks if `today` falls within a block and applies `effect` (skip → empty schedule, window → shrink working window, boost_tags → re-rank matching tasks).
+
 ### Suggest Next
 Next-action recommendation. Returns the top-ranked task for now plus related Knowledge Entries and Ideas (semantic search) for context. Manual promotion via `idea.promote_to_task`.
 
