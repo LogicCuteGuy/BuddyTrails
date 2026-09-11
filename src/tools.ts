@@ -608,6 +608,31 @@ export const tools: ToolDef[] = [
     },
   },
   {
+    name: "link.create",
+    description: "Create a one-time 6-digit link code for Discord verification (10 min expiry, single-use). Run this in Open WebUI to link your account, then verify in Discord with /buddytrails-verify <code>.",
+    inputSchema: z.object({}),
+    handler: async () => {
+      const db = getDb();
+      const userId = getCurrentUserId();
+      if (userId === "anonymous" || userId === "local") throw new Error("Missing X-User-Id — link requires authentication via Open WebUI Custom Headers");
+      // Cleanup expired codes
+      try { db.prepare(`DELETE FROM link_codes WHERE expires_at < ?`).run(nowIso()); } catch {}
+      // Generate 6-digit code (100000-999999), ensure uniqueness
+      let code: string;
+      let attempts = 0;
+      do {
+        code = String(Math.floor(100000 + Math.random() * 900000));
+        const existing = db.prepare(`SELECT code FROM link_codes WHERE code = ?`).get(code) as any;
+        if (!existing) break;
+        attempts++;
+      } while (attempts < 5);
+      const createdAt = nowIso();
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+      db.prepare(`INSERT INTO link_codes (code, openwebui_user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`).run(code, userId, createdAt, expiresAt);
+      return { code, openwebui_user_id: userId, expires_at: expiresAt, expires_in: "10m", next_step: "In Discord, run /buddytrails-verify code:<code> (works in DMs, no guild needed) to link your Discord account." };
+    },
+  },
+  {
     name: "health",
     description: "Health check",
     inputSchema: z.object({}),

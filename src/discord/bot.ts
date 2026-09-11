@@ -14,7 +14,7 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBit
 
 const commands = [
   new SlashCommandBuilder().setName("buddytrails-setup").setDescription("Setup BuddyTrails — guild channel or DM").setDMPermission(true),
-  new SlashCommandBuilder().setName("buddytrails-link").setDescription("Link your Open WebUI account for DMs").addStringOption(o => o.setName("openwebui_user").setDescription("Your Open WebUI user ID/email (X-User-Id)").setRequired(true)),
+  new SlashCommandBuilder().setName("buddytrails-verify").setDescription("Verify Open WebUI link code (6-digit, 10 min)").addStringOption(o => o.setName("code").setDescription("6-digit code from Open WebUI link.create").setRequired(true)).setDMPermission(true),
   new SlashCommandBuilder().setName("remind").setDescription("Schedule reminder").addStringOption(o => o.setName("task_id").setDescription("Task ID").setRequired(true)).addStringOption(o => o.setName("at").setDescription("ISO time").setRequired(true)),
   new SlashCommandBuilder().setName("due-soon").setDescription("Tasks due soon").addStringOption(o => o.setName("within").setDescription("24h or 3d").setRequired(false)),
   new SlashCommandBuilder().setName("task-today").setDescription("Today's schedule"),
@@ -88,13 +88,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     db.prepare(`INSERT INTO discord_settings (guild_id, channel_id, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id, updated_at=excluded.updated_at`).run(gid, cid, now, now);
     await interaction.reply(`✅ BuddyTrails setup saved\nGuild: ${gid}\nChannel: <#${cid}> (${cid})\nHourly 3★ reminders will post here. Re-run in another channel to move it. DMs also work — run \`/buddytrails-setup\` in a DM to get DMs there.`);
-  } else if (interaction.commandName === "buddytrails-link") {
-    const openwebuiUser = interaction.options.getString("openwebui_user", true).trim();
-    const discordUserId = interaction.user.id;
+  } else if (interaction.commandName === "buddytrails-verify") {
+    const code = interaction.options.getString("code", true).trim();
     const db = getDb();
+    const row = db.prepare(`SELECT code, openwebui_user_id, expires_at FROM link_codes WHERE code = ?`).get(code) as any;
+    if (!row) {
+      await interaction.reply({ content: `❌ Invalid code \`${code}\`. In Open WebUI, run the \`link.create\` tool to get a fresh 6-digit code (10 min expiry).`, ephemeral: true });
+      return;
+    }
+    if (row.expires_at < new Date().toISOString()) {
+      try { db.prepare(`DELETE FROM link_codes WHERE code = ?`).run(code); } catch {}
+      await interaction.reply({ content: `❌ Code \`${code}\` expired. Run \`link.create\` in Open WebUI again for a new code.`, ephemeral: true });
+      return;
+    }
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO user_discord_link (openwebui_user_id, discord_user_id, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(openwebui_user_id) DO UPDATE SET discord_user_id=excluded.discord_user_id, updated_at=excluded.updated_at`).run(openwebuiUser, discordUserId, now, now);
-    await interaction.reply({ content: `✅ Linked Open WebUI \`${openwebuiUser}\` → Discord <@${discordUserId}> — 3★ due-soon DMs will come here.`, ephemeral: true });
+    db.prepare(`INSERT INTO user_discord_link (openwebui_user_id, discord_user_id, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(openwebui_user_id) DO UPDATE SET discord_user_id=excluded.discord_user_id, updated_at=excluded.updated_at`).run(row.openwebui_user_id, interaction.user.id, now, now);
+    try { db.prepare(`DELETE FROM link_codes WHERE code = ?`).run(code); } catch {}
+    await interaction.reply({ content: `✅ Verified — linked Open WebUI \`${row.openwebui_user_id}\` → Discord <@${interaction.user.id}>. 3★ due-soon DMs will come here.`, ephemeral: true });
+    try { await interaction.user.send(`✅ BuddyTrails linked: Open WebUI \`${row.openwebui_user_id}\` → this Discord account. You're all set — 3★ reminders will DM you here.`); } catch {}
   } else if (interaction.commandName === "remind") {
     const taskId = interaction.options.getString("task_id", true);
     const at = interaction.options.getString("at", true);
@@ -141,6 +152,26 @@ client.on(Events.MessageCreate, async (msg) => {
     const res = await runWithUser(userId, () => tool.handler({})) as any;
     await msg.reply(`Daily brief: ${res.tasks.length} tasks today`);
   }
+});
+
+// Auto welcome when bot is added to a guild — DM the adder/inviter if possible, else post in system channel
+client.on(Events.GuildCreate, async (guild) => {
+  try {
+    const welcome = `👋 Thanks for adding BuddyTrails!\n\n**Link your Open WebUI account (2 steps):**\n1. In Open WebUI, run the \`link.create\` tool — you'll get a 6-digit code (10 min, single-use).\n2. Here in Discord, run \`/buddytrails-verify code:<code>\` (works in DMs too, no guild needed).\n\nThen 3★ due-soon reminders will DM you. You can also run \`/buddytrails-setup\` in any guild text channel or in a DM to choose where guild reminders post.`;
+    // Try to DM the guild owner as best-effort inviter
+    try {
+      const owner = await guild.fetchOwner();
+      await owner.send(welcome);
+      console.error(`GuildCreate welcome DM sent to owner ${owner.id} for guild ${guild.id}`);
+      return;
+    } catch {}
+    // Fallback: try system channel
+    const ch = guild.systemChannel;
+    if (ch?.isTextBased() && (ch as any).send) {
+      await (ch as any).send(welcome);
+      console.error(`GuildCreate welcome sent to systemChannel for guild ${guild.id}`);
+    }
+  } catch (e) { console.error("GuildCreate welcome failed", e); }
 });
 
 client.login(token);

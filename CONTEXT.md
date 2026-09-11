@@ -18,7 +18,10 @@ Identity from Open WebUI Custom Headers (`X-User-Id` = `{{USER_ID}}` or `{{USER_
 Idea/Task scoped to one Open WebUI User via `user_id`. All `idea.*`/`task.*`/`brief.*`/`search.all` filter by `user_id`; `knowledge.*` does not.
 
 ### User Discord Link
-Mapping `openwebui_user_id → discord_user_id` via `/buddytrails-link <openwebui_user>`. Enables per-user DM for 3★ due-soon scheduler.
+Mapping `openwebui_user_id → discord_user_id` created by verifying a one-time Link Code via `/buddytrails-verify code:<6-digit>`. Enables per-user DM for 3★ due-soon scheduler.
+
+### Link Code
+One-time 6-digit code (`link_codes: code PK, openwebui_user_id, created_at, expires_at`) created in Open WebUI via `link.create` (10 min expiry, single-use). Verified in Discord via `/buddytrails-verify` to create the User Discord Link; expired/invalid codes are rejected and cleaned up.
 
 ### Digest
 Processing applied on write: chunk (turn or ~512 tokens) → embedding (lightweight model e.g. `all-MiniLM-L6-v2` / `bge-small`) → auto-summary → auto-tags. Stored alongside raw for exact recall + semantic search.

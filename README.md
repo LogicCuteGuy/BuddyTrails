@@ -8,8 +8,8 @@ Single local MCP server with three namespaces — **Knowledge Hook DB**, **Have-
 - **Have-Idea** — lightweight idea capture with semantic `suggest` when stuck
 - **Work Task** — daily tasks with 3★ priority, deadline, estimate; Raw Task Data two-step enrichment (paste titles → assign priority/estimate); time-blocked Work Schedule + Suggest Next
 - **Auto-skills** — `knowledge.summarize`/`export`/`retag`, `idea.brainstorm`/`cluster`/`refine`, `task.breakdown`/`pomodoro`/`time_log`, `brief.daily`/`weekly`, `search.all` — all via function-calling (slash aliases remain)
-- **Discord bot** — `DISCORD_TOKEN`, `/buddytrails-setup`, `/buddytrails-link`, hourly 3★ DM per linked user, `remind`/`due_soon`
-- **Multi-account** — Open WebUI Custom Headers (`X-User-Id: {{USER_ID}}`/`{{USER_EMAIL}}`), Knowledge shared, Ideas/Tasks private per user, `stdio` = `local`
+- **Discord bot** — `DISCORD_TOKEN`, `/buddytrails-setup`, `/buddytrails-verify` (code flow), hourly 3★ DM per linked user, `remind`/`due_soon`, auto-welcome on add
+- **Multi-account** — Open WebUI Custom Headers (`X-User-Id: {{USER_ID}}`/`{{USER_EMAIL}}`), Knowledge shared, Ideas/Tasks private per user, `stdio` = `local`; link via `link.create` (Open WebUI) → `/buddytrails-verify` (Discord)
 
 ## Requirements
 
@@ -64,7 +64,7 @@ DISCORD_TOKEN=... node dist/discord/bot.js
 ```
 
 - `/buddytrails-setup` — **works in DMs and guilds** — guild channel or DM for hourly 3★ reminders (DM: no guild needed, `DM:<userId>`).
-- `/buddytrails-link <openwebui_user>` — **works in DMs, no guild needed** — link your Open WebUI `X-User-Id` (email/ID) to your Discord account for per-user 3★ DM reminders.
+- `link.create` (Open WebUI tool) → `/buddytrails-verify code:<6-digit>` (Discord, **works in DMs, no guild needed**) — link your Open WebUI `X-User-Id` to Discord for per-user 3★ DM reminders. Code is 6-digit, 10 min expiry, single-use. Auto-welcome DM on bot add explains the flow.
 
 ## MCP Tools
 
@@ -77,6 +77,7 @@ DISCORD_TOKEN=... node dist/discord/bot.js
 | `search.*` | `all` |
 | `conversation.*` | `set_opt_out`, `get_opt_out` |
 | `hook.*` | `on_turn` |
+| `link.*` | `create` (6-digit code, 10 min, single-use) |
 | `health` | — |
 
 All tools validate via `zod` and return structured JSON. See `src/tools.ts` for schemas.
@@ -92,7 +93,7 @@ npm run dev:http    # tsx http
 
 ## Storage
 
-Single file `buddytrails.db` (SQLite, `BUDDYTRAILS_DB` env). Tables: `knowledge_entries` (shared, `created_by` audit), `ideas`/`tasks`/`raw_task_items`/`reminders`/`pomodoro_sessions`/`conversation_settings` (private per `user_id`), `discord_settings`, `user_discord_link`. Existing DBs auto-migrated. Local-only, no cloud sync.
+Single file `buddytrails.db` (SQLite, `BUDDYTRAILS_DB` env). Tables: `knowledge_entries` (shared, `created_by` audit), `ideas`/`tasks`/`raw_task_items`/`reminders`/`pomodoro_sessions`/`conversation_settings` (private per `user_id`), `discord_settings`, `user_discord_link`, `link_codes` (one-time 6-digit, 10 min). Existing DBs auto-migrated. Local-only, no cloud sync.
 
 ## Setup Guide
 

@@ -19,7 +19,7 @@ export function getDbPath(): string {
 class MemDb implements Db {
   tables: Map<string, Map<string, any>> = new Map();
   constructor(_path: string) {
-    for (const t of ["knowledge_entries","ideas","tasks","raw_task_items","reminders","pomodoro_sessions","conversation_settings","discord_settings","user_discord_link"]) {
+    for (const t of ["knowledge_entries","ideas","tasks","raw_task_items","reminders","pomodoro_sessions","conversation_settings","discord_settings","user_discord_link","link_codes"]) {
       this.tables.set(t, new Map());
     }
   }
@@ -56,9 +56,10 @@ class MemDb implements Db {
               row[c] = vals[valIdx++];
             }
           });
-          let key = row.id || row.temp_id || row.guild_id || row.openwebui_user_id || String(Math.random());
+          let key = row.id || row.temp_id || row.guild_id || row.openwebui_user_id || row.code || String(Math.random());
           if (tbl === "conversation_settings") key = `${row.user_id}:${row.conversation_id}`;
           else if (tbl === "user_discord_link") key = row.openwebui_user_id;
+          else if (tbl === "link_codes") key = row.code;
           else if (row.conversation_id && row.user_id) key = `${row.user_id}:${row.conversation_id}`;
           map.set(key, row);
           return { changes: 1 };
@@ -165,6 +166,9 @@ class MemDb implements Db {
         }
         if (/FROM user_discord_link WHERE openwebui_user_id/i.test(sql)) {
           return self.tables.get("user_discord_link")?.get(vals[0]) || undefined;
+        }
+        if (/FROM link_codes WHERE code/i.test(sql)) {
+          return self.tables.get("link_codes")?.get(vals[0]) || undefined;
         }
         if (/SELECT raw_text, user_id FROM raw_task_items WHERE temp_id/i.test(sql)) {
           return self.tables.get("raw_task_items")?.get(vals[0]) || undefined;
@@ -291,6 +295,11 @@ class MemDb implements Db {
         if (/FROM user_discord_link/i.test(sql)) {
           return [...(self.tables.get("user_discord_link")?.values()||[])];
         }
+        if (/FROM link_codes/i.test(sql)) {
+          let rows = [...(self.tables.get("link_codes")?.values()||[])];
+          if (/expires_at < \?/i.test(sql)) rows = rows.filter((r:any)=> r.expires_at < vals[0]);
+          return rows;
+        }
         return [];
       }
     };
@@ -402,6 +411,12 @@ export function initSchema(db: Db): void {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS link_codes (
+      code TEXT PRIMARY KEY,
+      openwebui_user_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
   `);
   // Migrations for existing DBs (ignore if column already exists)
   for (const sql of [
@@ -449,6 +464,7 @@ export function initSchema(db: Db): void {
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id)`); } catch {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_user_deadline ON tasks(user_id, deadline)`); } catch {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_raw_user ON raw_task_items(user_id)`); } catch {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_link_codes_expires ON link_codes(expires_at)`); } catch {}
   try {
     db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_vec USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[384]);
@@ -458,6 +474,6 @@ export function initSchema(db: Db): void {
 }
 
 export function resetDb(db: Db): void {
-  db.exec(`DELETE FROM knowledge_entries; DELETE FROM ideas; DELETE FROM tasks; DELETE FROM raw_task_items; DELETE FROM reminders; DELETE FROM pomodoro_sessions; DELETE FROM conversation_settings; DELETE FROM discord_settings; DELETE FROM user_discord_link;`);
+  db.exec(`DELETE FROM knowledge_entries; DELETE FROM ideas; DELETE FROM tasks; DELETE FROM raw_task_items; DELETE FROM reminders; DELETE FROM pomodoro_sessions; DELETE FROM conversation_settings; DELETE FROM discord_settings; DELETE FROM user_discord_link; DELETE FROM link_codes;`);
   try { db.exec(`DELETE FROM knowledge_vec; DELETE FROM ideas_vec;`); } catch {}
 }
