@@ -1,5 +1,7 @@
 import { Client, GatewayIntentBits, Events, SlashCommandBuilder, REST, Routes, ApplicationIntegrationType, InteractionContextType } from "discord.js";
+import { tools } from "../tools.js";
 import { getDb } from "../db.js";
+import { runWithUser } from "../context.js";
 
 const token = process.env.DISCORD_TOKEN;
 
@@ -25,7 +27,25 @@ client.once(Events.ClientReady, async () => {
     await rest.put(Routes.applicationCommands(client.user!.id), { body: commands });
     console.error(`Registered global commands`);
   } catch (e) { console.error("Failed to register commands", e); }
-  // No scheduler DMs — guild-only, local visible only
+  // Hourly DM notifications for 3★ due-soon per linked user
+  setInterval(async () => {
+    try {
+      const db = getDb();
+      const links = db.prepare(`SELECT openwebui_user_id, discord_user_id FROM user_discord_link`).all() as any[];
+      if (links.length === 0) return;
+      for (const link of links) {
+        try {
+          const dueSoon = tools.find(t => t.name === "task.due_soon")!;
+          const res = await runWithUser(link.openwebui_user_id, () => dueSoon.handler({ within: "24h" })) as any;
+          const urgent = (res.tasks || []).filter((t: any) => t.priority === 3);
+          if (urgent.length === 0) continue;
+          const msg = `⏰ ${urgent.length} 3★ task(s) due soon:\n` + urgent.map((t: any) => `- ${t.title} (due ${t.deadline})`).join("\n");
+          const user = await client.users.fetch(link.discord_user_id);
+          await user.send(msg);
+        } catch (e) { console.error(`Scheduler DM failed for ${link.openwebui_user_id}`, e); }
+      }
+    } catch (e) { console.error("Scheduler error", e); }
+  }, 60 * 60 * 1000);
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -46,7 +66,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
   const now = new Date().toISOString();
   db.prepare(`INSERT INTO user_discord_link (openwebui_user_id, discord_user_id, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(openwebui_user_id) DO UPDATE SET discord_user_id=excluded.discord_user_id, updated_at=excluded.updated_at`).run(row.openwebui_user_id, interaction.user.id, now, now);
   try { db.prepare(`DELETE FROM link_codes WHERE code = ?`).run(code); } catch {}
-  await interaction.reply({ content: `✅ Verified — linked Open WebUI \`${row.openwebui_user_id}\` → Discord <@${interaction.user.id}>.`, ephemeral: true });
+  await interaction.reply({ content: `✅ Verified — linked Open WebUI \`${row.openwebui_user_id}\` → Discord <@${interaction.user.id}>. 3★ due-soon DMs will come here.`, ephemeral: true });
+  try { await interaction.user.send(`✅ BuddyTrails linked: Open WebUI \`${row.openwebui_user_id}\` → this Discord account. You're all set — 3★ reminders will DM you here.`); } catch {}
 });
 
 // No MessageCreate auto-replies, no GuildCreate/UserInstall DMs — guild-only, local visible only
