@@ -89,8 +89,8 @@ DISCORD_TOKEN=... node dist/discord/bot.js
 
 In Discord:
 
-- `/buddytrails-setup` — run in any guild text channel to save that guild/channel for the bot. Guild-only (DMs can't set a guild channel).
-- `/buddytrails-link <openwebui_user>` — **works in DMs and guilds, no guild needed**. Links your Open WebUI `X-User-Id` (e.g. email) to your Discord account. Hourly scheduler DMs each linked user their own 3★ due-soon tasks. Without a link, scheduler logs and skips DMs.
+- `/buddytrails-setup` — **works in DMs and guilds**. In a guild text channel: saves that guild/channel. In a DM: saves your DM for hourly 3★ reminders (no guild needed).
+- `/buddytrails-link <openwebui_user>` — **works in DMs and guilds, no guild needed**. Links your Open WebUI `X-User-Id` (e.g. email) to your Discord account. Hourly scheduler DMs each linked user their own 3★ due-soon tasks. Without a link, DM-setup users still get DMs (fallback to Discord ID).
 - `/remind`, `/due-soon`, `/task-today` — work in DMs and guilds, respect the link (fallback to Discord user ID if not linked).
 
 ## 7. Verify

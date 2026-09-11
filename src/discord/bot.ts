@@ -13,7 +13,7 @@ if (!token) {
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 
 const commands = [
-  new SlashCommandBuilder().setName("buddytrails-setup").setDescription("Setup BuddyTrails in this guild/channel").setDMPermission(false),
+  new SlashCommandBuilder().setName("buddytrails-setup").setDescription("Setup BuddyTrails — guild channel or DM").setDMPermission(true),
   new SlashCommandBuilder().setName("buddytrails-link").setDescription("Link your Open WebUI account for DMs").addStringOption(o => o.setName("openwebui_user").setDescription("Your Open WebUI user ID/email (X-User-Id)").setRequired(true)),
   new SlashCommandBuilder().setName("remind").setDescription("Schedule reminder").addStringOption(o => o.setName("task_id").setDescription("Task ID").setRequired(true)).addStringOption(o => o.setName("at").setDescription("ISO time").setRequired(true)),
   new SlashCommandBuilder().setName("due-soon").setDescription("Tasks due soon").addStringOption(o => o.setName("within").setDescription("24h or 3d").setRequired(false)),
@@ -27,16 +27,17 @@ client.once(Events.ClientReady, async () => {
     await rest.put(Routes.applicationCommands(client.user!.id), { body: commands });
     console.error(`Registered global commands`);
   } catch (e) { console.error("Failed to register commands", e); }
-  // Hourly scheduler for 3★ due/overdue — DM per user via user_discord_link
+  // Hourly scheduler for 3★ due/overdue — DM per linked user, plus DM-setup users
   setInterval(async () => {
     try {
       const db = getDb();
       const links = db.prepare(`SELECT openwebui_user_id, discord_user_id FROM user_discord_link`).all() as any[];
-      if (links.length === 0) {
-        // Fallback: log only (no linked users)
-        console.error("Scheduler: no linked Discord users, skipping DMs");
+      const dmSetups = db.prepare(`SELECT guild_id, channel_id FROM discord_settings WHERE guild_id LIKE 'DM:%'`).all() as any[];
+      if (links.length === 0 && dmSetups.length === 0) {
+        console.error("Scheduler: no linked users or DM setups, skipping");
         return;
       }
+      // Linked users: per-user filtered tasks
       for (const link of links) {
         try {
           const dueSoon = tools.find(t => t.name === "task.due_soon")!;
@@ -48,6 +49,25 @@ client.once(Events.ClientReady, async () => {
           await user.send(msg);
         } catch (e) { console.error(`Scheduler DM failed for ${link.openwebui_user_id}`, e); }
       }
+      // DM-setup users without a link: send unfiltered (local) tasks via DM channel
+      const linkedIds = new Set(links.map((l: any) => l.discord_user_id));
+      for (const dm of dmSetups) {
+        const discordUserId = dm.guild_id.slice(3); // "DM:<id>"
+        if (linkedIds.has(discordUserId)) continue; // already handled via link
+        try {
+          const dueSoon = tools.find(t => t.name === "task.due_soon")!;
+          const res = await runWithUser(discordUserId, () => dueSoon.handler({ within: "24h" })) as any;
+          const urgent = (res.tasks || []).filter((t: any) => t.priority === 3);
+          if (urgent.length === 0) continue;
+          const msg = `⏰ ${urgent.length} 3★ task(s) due soon:\n` + urgent.map((t: any) => `- ${t.title} (due ${t.deadline})`).join("\n");
+          const ch = await client.channels.fetch(dm.channel_id) as any;
+          if (ch?.send) await ch.send(msg);
+          else {
+            const user = await client.users.fetch(discordUserId);
+            await user.send(msg);
+          }
+        } catch (e) { console.error(`Scheduler DM-setup failed for ${discordUserId}`, e); }
+      }
     } catch (e) { console.error("Scheduler error", e); }
   }, 60 * 60 * 1000);
 });
@@ -57,15 +77,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.commandName === "buddytrails-setup") {
     const gid = interaction.guildId;
     const cid = interaction.channelId;
-    if (!gid || !cid) {
-      // DM or group DM — still allow link, but setup needs a guild
-      await interaction.reply({ content: "Run `/buddytrails-setup` inside a guild text channel to set the bot's channel. For DMs, use `/buddytrails-link <openwebui_user>` — no guild needed, DMs work anywhere.", ephemeral: true });
-      return;
-    }
     const db = getDb();
     const now = new Date().toISOString();
+    if (!gid || !cid) {
+      // DM — save as DM target (guild_id = "DM:<userId>")
+      const dmKey = `DM:${interaction.user.id}`;
+      db.prepare(`INSERT INTO discord_settings (guild_id, channel_id, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id, updated_at=excluded.updated_at`).run(dmKey, cid, now, now);
+      await interaction.reply({ content: `✅ BuddyTrails DM setup saved — hourly 3★ reminders will DM you here. For per-user DMs, also run \`/buddytrails-link <openwebui_user>\`.`, ephemeral: true });
+      return;
+    }
     db.prepare(`INSERT INTO discord_settings (guild_id, channel_id, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id, updated_at=excluded.updated_at`).run(gid, cid, now, now);
-    await interaction.reply(`✅ BuddyTrails setup saved\nGuild: ${gid}\nChannel: <#${cid}> (${cid})\nHourly 3★ reminders will post here. Re-run in another channel to move it.`);
+    await interaction.reply(`✅ BuddyTrails setup saved\nGuild: ${gid}\nChannel: <#${cid}> (${cid})\nHourly 3★ reminders will post here. Re-run in another channel to move it. DMs also work — run \`/buddytrails-setup\` in a DM to get DMs there.`);
   } else if (interaction.commandName === "buddytrails-link") {
     const openwebuiUser = interaction.options.getString("openwebui_user", true).trim();
     const discordUserId = interaction.user.id;
