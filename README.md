@@ -63,8 +63,8 @@ Open WebUI: Settings → Admin → Integrations → External Tool Servers → Ty
 DISCORD_TOKEN=... node dist/discord/bot.js
 ```
 
-- `/buddytrails-setup` in any guild text channel to save that guild/channel (stored in `discord_settings`).
-- `/buddytrails-link <openwebui_user>` — link your Open WebUI `X-User-Id` (email/ID) to your Discord account for per-user 3★ DM reminders. Hourly scheduler DMs each linked user their own due-soon tasks.
+- `/buddytrails-setup` in any guild text channel to save that guild/channel (stored in `discord_settings`, guild-only).
+- `/buddytrails-link <openwebui_user>` — **works in DMs, no guild needed** — link your Open WebUI `X-User-Id` (email/ID) to your Discord account for per-user 3★ DM reminders. Hourly scheduler DMs each linked user their own due-soon tasks.
 
 ## MCP Tools
 

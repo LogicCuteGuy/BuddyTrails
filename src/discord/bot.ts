@@ -13,7 +13,7 @@ if (!token) {
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 
 const commands = [
-  new SlashCommandBuilder().setName("buddytrails-setup").setDescription("Setup BuddyTrails in this guild/channel"),
+  new SlashCommandBuilder().setName("buddytrails-setup").setDescription("Setup BuddyTrails in this guild/channel").setDMPermission(false),
   new SlashCommandBuilder().setName("buddytrails-link").setDescription("Link your Open WebUI account for DMs").addStringOption(o => o.setName("openwebui_user").setDescription("Your Open WebUI user ID/email (X-User-Id)").setRequired(true)),
   new SlashCommandBuilder().setName("remind").setDescription("Schedule reminder").addStringOption(o => o.setName("task_id").setDescription("Task ID").setRequired(true)).addStringOption(o => o.setName("at").setDescription("ISO time").setRequired(true)),
   new SlashCommandBuilder().setName("due-soon").setDescription("Tasks due soon").addStringOption(o => o.setName("within").setDescription("24h or 3d").setRequired(false)),
@@ -57,7 +57,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.commandName === "buddytrails-setup") {
     const gid = interaction.guildId;
     const cid = interaction.channelId;
-    if (!gid || !cid) { await interaction.reply("Run this inside a guild text channel."); return; }
+    if (!gid || !cid) {
+      // DM or group DM — still allow link, but setup needs a guild
+      await interaction.reply({ content: "Run `/buddytrails-setup` inside a guild text channel to set the bot's channel. For DMs, use `/buddytrails-link <openwebui_user>` — no guild needed, DMs work anywhere.", ephemeral: true });
+      return;
+    }
     const db = getDb();
     const now = new Date().toISOString();
     db.prepare(`INSERT INTO discord_settings (guild_id, channel_id, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id, updated_at=excluded.updated_at`).run(gid, cid, now, now);
