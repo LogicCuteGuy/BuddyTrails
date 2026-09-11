@@ -1,0 +1,39 @@
+# CONTEXT.md
+
+> Glossary for BuddyTrails — MCP server + skills for GitHub Copilot & Open WebUI.
+> Single-context repo. Terms below are the canonical vocabulary; use them verbatim in issues, specs, and code.
+
+## Glossary
+
+### Knowledge Hook DB
+Continuous knowledge repository. Auto-hooks every user ↔ AI turn, chunks, embeds with a lightweight model, and stores raw + vector for semantic search. Index-based, digest-on-write.
+
+### Knowledge Entry
+One stored unit in Knowledge Hook DB. Fields: `id, raw_text, summary, tags[], embedding, source, created_at`. Source = conversation turn, manual ingest, URL, or file.
+
+### Digest
+Processing applied on write: chunk (turn or ~512 tokens) → embedding (lightweight model e.g. `all-MiniLM-L6-v2` / `bge-small`) → auto-summary → auto-tags. Stored alongside raw for exact recall + semantic search.
+
+### Have-Idea
+Idea capture subsystem. Stores lightweight ideas for future retrieval when the user is stuck or asks "what next". Separate from Knowledge — faster capture, no heavy digest.
+
+### Idea
+One captured idea. Fields: `id, text, tags[], context, embedding, created_at, promoted_task_id?`. Retrieved via semantic search (`suggest`).
+
+### Work Task
+Daily task / to-do / homework item. Fields: `id, title, description, priority(1-3★), deadline, estimate_minutes, status(todo|doing|done), source, created_at`. Priority 3★ = highest. `source` = manual, notification, or promoted from Idea.
+
+### Raw Task Data
+Unenriched task input — just titles/descriptions pasted by the user, without priority or estimate. System lists them back so the user can assign `priority` and `estimate_minutes/hours` in a second pass.
+
+### Work Schedule (Time Blocks)
+Time-blocked plan for today. Derived from Work Tasks filtered to `deadline == today` OR overdue `priority=3★`. Sorted by `priority ★★★ > ★★ > ★`, then `deadline`, then `estimate`. Packed into working window (default 09:00–18:00) with breaks; warns on overflow. Produced by `task.get_today_schedule`.
+
+### Suggest Next
+Next-action recommendation. Returns the top-ranked task for now plus related Knowledge Entries and Ideas (semantic search) for context. Manual promotion via `idea.promote_to_task`.
+
+## Non-terms (avoid)
+
+- "Memory" — use Knowledge Entry or Idea explicitly.
+- "Job" alone — use Work Task.
+- "Schedule" alone — use Work Schedule.
