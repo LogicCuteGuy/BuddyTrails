@@ -22,9 +22,13 @@ export const tools: ToolDef[] = [
   {
     name: "knowledge.ingest",
     description: "Ingest text into Knowledge Hook DB (stubbed)",
-    inputSchema: z.object({ text: z.string().min(1), source: z.string().optional(), tags: z.array(z.string()).optional() }),
-    handler: async ({ text, source, tags }) => {
+    inputSchema: z.object({ text: z.string().min(1), source: z.string().optional(), tags: z.array(z.string()).optional(), conversation_id: z.string().optional() }),
+    handler: async ({ text, source, tags, conversation_id }) => {
       const db = getDb();
+      if (conversation_id) {
+        const setting = db.prepare(`SELECT opt_out FROM conversation_settings WHERE conversation_id = ?`).get(conversation_id) as any;
+        if (setting?.opt_out) return { id: null, skipped: true, reason: "opted out" };
+      }
       const id = randomUUID();
       const emb = embed(text);
       const summary = text.slice(0, 120);
@@ -521,6 +525,46 @@ export const tools: ToolDef[] = [
       const iRows = db.prepare(`SELECT id, text FROM ideas LIMIT 20`).all() as any[];
       const tRows = db.prepare(`SELECT id, title FROM tasks LIMIT 20`).all() as any[];
       return { query, knowledge: kRows.slice(0, 5), ideas: iRows.slice(0, 5), tasks: tRows.slice(0, 5) };
+    },
+  },
+  {
+    name: "conversation.set_opt_out",
+    description: "Set opt-out flag for a conversation",
+    inputSchema: z.object({ conversation_id: z.string().min(1), opt_out: z.boolean() }),
+    handler: async ({ conversation_id, opt_out }) => {
+      const db = getDb();
+      const existing = db.prepare(`SELECT conversation_id FROM conversation_settings WHERE conversation_id = ?`).get(conversation_id) as any;
+      if (existing) {
+        db.prepare(`UPDATE conversation_settings SET opt_out = ? WHERE conversation_id = ?`).run(opt_out ? 1 : 0, conversation_id);
+      } else {
+        db.prepare(`INSERT INTO conversation_settings (conversation_id, opt_out, created_at) VALUES (?, ?, ?)`).run(conversation_id, opt_out ? 1 : 0, nowIso());
+      }
+      return { conversation_id, opt_out };
+    },
+  },
+  {
+    name: "conversation.get_opt_out",
+    description: "Get opt-out flag for a conversation",
+    inputSchema: z.object({ conversation_id: z.string().min(1) }),
+    handler: async ({ conversation_id }) => {
+      const db = getDb();
+      const row = db.prepare(`SELECT opt_out FROM conversation_settings WHERE conversation_id = ?`).get(conversation_id) as any;
+      return { conversation_id, opt_out: row ? !!row.opt_out : false };
+    },
+  },
+  {
+    name: "hook.on_turn",
+    description: "Auto-hook wiring stub: called on every user/AI turn, respects opt-out",
+    inputSchema: z.object({ text: z.string().min(1), role: z.enum(["user", "assistant"]), conversation_id: z.string().optional(), source: z.string().optional() }),
+    handler: async ({ text, role, conversation_id, source }) => {
+      const db = getDb();
+      if (conversation_id) {
+        const setting = db.prepare(`SELECT opt_out FROM conversation_settings WHERE conversation_id = ?`).get(conversation_id) as any;
+        if (setting?.opt_out) return { skipped: true, reason: "opted out" };
+      }
+      const ingest = tools.find((t) => t.name === "knowledge.ingest")!;
+      const result = await ingest.handler({ text, source: source ?? `turn:${role}`, conversation_id });
+      return { ingested: result.id, role, conversation_id };
     },
   },
   {

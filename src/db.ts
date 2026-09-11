@@ -235,6 +235,11 @@ export function initSchema(db: Db): void {
       channel TEXT,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS conversation_settings (
+      conversation_id TEXT PRIMARY KEY,
+      opt_out INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS pomodoro_sessions (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL,
