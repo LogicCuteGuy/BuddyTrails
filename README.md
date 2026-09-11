@@ -8,7 +8,8 @@ Single local MCP server with three namespaces — **Knowledge Hook DB**, **Have-
 - **Have-Idea** — lightweight idea capture with semantic `suggest` when stuck
 - **Work Task** — daily tasks with 3★ priority, deadline, estimate; Raw Task Data two-step enrichment (paste titles → assign priority/estimate); time-blocked Work Schedule + Suggest Next
 - **Auto-skills** — `knowledge.summarize`/`export`/`retag`, `idea.brainstorm`/`cluster`/`refine`, `task.breakdown`/`pomodoro`/`time_log`, `brief.daily`/`weekly`, `search.all` — all via function-calling (slash aliases remain)
-- **Discord bot** — `DISCORD_TOKEN`/`GUILD_ID`/`CHANNEL_ID`, `/buddytrails-setup`, hourly 3★ scheduler, `remind`/`due_soon`
+- **Discord bot** — `DISCORD_TOKEN`, `/buddytrails-setup`, `/buddytrails-link`, hourly 3★ DM per linked user, `remind`/`due_soon`
+- **Multi-account** — Open WebUI Custom Headers (`X-User-Id: {{USER_ID}}`/`{{USER_EMAIL}}`), Knowledge shared, Ideas/Tasks private per user, `stdio` = `local`
 
 ## Requirements
 
@@ -50,10 +51,11 @@ npm run start:http
 - `GET /health` — health check
 - `GET /tools` — list tools
 - `POST /tools/:name` — call a tool (JSON body = tool input)
-- `GET /sse` + `POST /messages?sessionId=...` — MCP SSE transport
+- `POST /mcp` — MCP Streamable HTTP (recommended, Open WebUI native)
+- `GET /sse` + `POST /messages?sessionId=...` — MCP SSE (legacy)
 - `PORT` env (default `3000`), `BUDDYTRAILS_DB` env (default `./buddytrails.db`)
 
-Open WebUI: add Tools pointing at `http://localhost:3000`, add a **Today** button calling `task.get_today_schedule`.
+Open WebUI: Settings → Admin → Integrations → External Tool Servers → Type **MCP (Streamable HTTP)** → URL `http://host.docker.internal:3000/mcp` (or `http://localhost:3000/mcp` if not in Docker) → Headers `{"X-User-Id": "{{USER_ID}}"} ` or `{"X-User-Id": "{{USER_EMAIL}}"}` (see https://docs.openwebui.com/features/extensibility/mcp/#custom-headers). Add a **Today** button calling `task.get_today_schedule`. Knowledge is shared; Ideas/Tasks are isolated per `X-User-Id`. Copilot `stdio` uses `user_id = "local"`.
 
 ### Discord Bot
 
@@ -61,7 +63,8 @@ Open WebUI: add Tools pointing at `http://localhost:3000`, add a **Today** butto
 DISCORD_TOKEN=... node dist/discord/bot.js
 ```
 
-Run `/buddytrails-setup` in any guild text channel to save that guild/channel (stored in `discord_settings` table). Hourly 3★ reminders post there. Re-run to move it.
+- `/buddytrails-setup` in any guild text channel to save that guild/channel (stored in `discord_settings`).
+- `/buddytrails-link <openwebui_user>` — link your Open WebUI `X-User-Id` (email/ID) to your Discord account for per-user 3★ DM reminders. Hourly scheduler DMs each linked user their own due-soon tasks.
 
 ## MCP Tools
 

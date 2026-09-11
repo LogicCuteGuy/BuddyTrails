@@ -1,12 +1,25 @@
 import express from "express";
 import cors from "cors";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpServer } from "../server.js";
 import { tools } from "../tools.js";
+import { extractUserIdFromHeaders, requestContext } from "../context.js";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Extract Open WebUI user from Custom Headers ({{USER_ID}}, {{USER_EMAIL}} etc.)
+// Open WebUI Custom Headers docs: https://docs.openwebui.com/features/extensibility/mcp/#custom-headers
+// Admin sets e.g. X-User-Id: {{USER_ID}} or X-User-Id: {{USER_EMAIL}} in the MCP connection's Headers JSON.
+// We accept X-User-Id, X-OpenWebUI-User, X-OpenWebUI-User-Email, X-User-Email, X-User.
+app.use((req, _res, next) => {
+  const userId = extractUserIdFromHeaders(req.headers as any, (req.body as any)?.user_id);
+  // Store for downstream handlers; MCP handlers also use AsyncLocalStorage
+  (req as any).userId = userId;
+  next();
+});
 
 app.get("/health", (_req, res) => res.json({ status: "ok", time: new Date().toISOString() }));
 
@@ -15,8 +28,9 @@ app.post("/tools/:name", async (req, res) => {
   if (!tool) return res.status(404).json({ error: `Unknown tool: ${req.params.name}` });
   const parsed = tool.inputSchema.safeParse(req.body ?? {});
   if (!parsed.success) return res.status(400).json({ error: parsed.error.message });
+  const userId = (req as any).userId as string;
   try {
-    const result = await tool.handler(parsed.data);
+    const result = await requestContext.run({ userId }, () => tool.handler(parsed.data));
     res.json(result);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -27,20 +41,35 @@ app.get("/tools", (_req, res) => {
   res.json({ tools: tools.map((t) => ({ name: t.name, description: t.description })) });
 });
 
-// SSE transport for MCP — per-session map to avoid race
+// Streamable HTTP (Open WebUI native, recommended) — https://docs.openwebui.com/features/extensibility/mcp/
+app.all("/mcp", async (req, res) => {
+  const userId = extractUserIdFromHeaders(req.headers as any, (req.query as any)?.user_id);
+  const server = createMcpServer();
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+  res.on("close", () => transport.close());
+  await server.connect(transport);
+  await requestContext.run({ userId }, () => transport.handleRequest(req, res, req.body));
+});
+
+// SSE transport for MCP — per-session map to avoid race (legacy, keep for compat)
 const sseTransports = new Map<string, SSEServerTransport>();
 app.get("/sse", async (req, res) => {
+  const userId = extractUserIdFromHeaders(req.headers as any, (req.query as any)?.user_id);
   const server = createMcpServer();
   const transport = new SSEServerTransport("/messages", res);
   sseTransports.set(transport.sessionId, transport);
+  // stash userId on transport for CallTool handler via AsyncLocalStorage
+  (transport as any)._userId = userId;
   res.on("close", () => sseTransports.delete(transport.sessionId));
   await server.connect(transport);
 });
 app.post("/messages", async (req, res) => {
   const sessionId = req.query.sessionId as string;
   const transport = sessionId ? sseTransports.get(sessionId) : [...sseTransports.values()][0];
-  if (transport) await transport.handlePostMessage(req, res);
-  else res.status(404).end();
+  if (transport) {
+    const userId = (transport as any)._userId ?? extractUserIdFromHeaders(req.headers as any);
+    await requestContext.run({ userId }, () => transport.handlePostMessage(req, res, req.body));
+  } else res.status(404).end();
 });
 
 const port = Number(process.env.PORT || 3000);

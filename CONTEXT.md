@@ -9,7 +9,16 @@
 Continuous knowledge repository. Auto-hooks every user ↔ AI turn, chunks, embeds with a lightweight model, and stores raw + vector for semantic search. Index-based, digest-on-write.
 
 ### Knowledge Entry
-One stored unit in Knowledge Hook DB. Fields: `id, raw_text, summary, tags[], embedding, source, created_at`. Source = conversation turn, manual ingest, URL, or file.
+One stored unit in Knowledge Hook DB. Fields: `id, raw_text, summary, tags[], embedding, source, created_at, created_by?`. Shared across all Open WebUI Users (no isolation); `created_by` is audit only.
+
+### Open WebUI User
+Identity from Open WebUI Custom Headers (`X-User-Id` = `{{USER_ID}}` or `{{USER_EMAIL}}`). Owns private data. `stdio` (Copilot) maps to `user_id = "local"`. Missing header → `anonymous` (private tools reject).
+
+### Private Idea / Private Task
+Idea/Task scoped to one Open WebUI User via `user_id`. All `idea.*`/`task.*`/`brief.*`/`search.all` filter by `user_id`; `knowledge.*` does not.
+
+### User Discord Link
+Mapping `openwebui_user_id → discord_user_id` via `/buddytrails-link <openwebui_user>`. Enables per-user DM for 3★ due-soon scheduler.
 
 ### Digest
 Processing applied on write: chunk (turn or ~512 tokens) → embedding (lightweight model e.g. `all-MiniLM-L6-v2` / `bge-small`) → auto-summary → auto-tags. Stored alongside raw for exact recall + semantic search.
@@ -18,10 +27,10 @@ Processing applied on write: chunk (turn or ~512 tokens) → embedding (lightwei
 Idea capture subsystem. Stores lightweight ideas for future retrieval when the user is stuck or asks "what next". Separate from Knowledge — faster capture, no heavy digest.
 
 ### Idea
-One captured idea. Fields: `id, text, tags[], context, embedding, created_at, promoted_task_id?`. Retrieved via semantic search (`suggest`).
+One captured idea. Fields: `id, text, tags[], context, embedding, created_at, promoted_task_id?, user_id`. Private per Open WebUI User. Retrieved via semantic search (`suggest`).
 
 ### Work Task
-Daily task / to-do / homework item. Fields: `id, title, description, priority(1-3★), deadline, estimate_minutes, status(todo|doing|done), source, created_at`. Priority 3★ = highest. `source` = manual, notification, or promoted from Idea.
+Daily task / to-do / homework item. Fields: `id, title, description, priority(1-3★), deadline, estimate_minutes, status(todo|doing|done), source, created_at, user_id`. Private per Open WebUI User. Priority 3★ = highest. `source` = manual, notification, or promoted from Idea.
 
 ### Raw Task Data
 Unenriched task input — just titles/descriptions pasted by the user, without priority or estimate. System lists them back so the user can assign `priority` and `estimate_minutes/hours` in a second pass.

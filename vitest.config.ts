@@ -4,5 +4,7 @@ export default defineConfig({
     include: ["tests/**/*.test.ts"],
     environment: "node",
     testTimeout: 15000,
+    fileParallelism: false,
+    poolOptions: { forks: { singleFork: true } },
   },
 });
