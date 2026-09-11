@@ -30,7 +30,7 @@ cp .env.example .env
 | `PORT` | `3000` | HTTP/SSE port |
 | `DISCORD_TOKEN` | — | Required only for Discord bot |
 
-No `DISCORD_GUILD_ID`/`DISCORD_CHANNEL_ID` — guild/channel are saved via `/buddytrails-setup` in Discord (stored in `discord_settings` table).
+No `DISCORD_GUILD_ID`/`DISCORD_CHANNEL_ID` — Discord is guild-only via `/buddytrails-verify` (stored in `user_discord_link` + `link_codes`).
 
 ## 4. GitHub Copilot (stdio)
 
@@ -81,17 +81,15 @@ curl http://localhost:3000/health
 **REST (non-MCP):**
 - `GET /health`, `GET /tools`, `POST /tools/:name` (also respects `X-User-Id` via `AsyncLocalStorage`)
 
-## 6. Discord Bot
+## 6. Discord Bot (guild-only)
 
 ```bash
 DISCORD_TOKEN=... node dist/discord/bot.js
 ```
 
-In Discord:
-
-- `/buddytrails-setup` — **works in DMs and guilds**. In a guild text channel: saves that guild/channel. In a DM: saves your DM for hourly 3★ reminders (no guild needed).
-- **Link (flipped flow):** In Open WebUI run the `link.create` tool → you get a 6-digit code (10 min, single-use). Then in Discord run `/buddytrails-verify code:<code>` — **works in DMs, no guild needed**. This creates `openwebui_user_id → discord_user_id` for per-user 3★ DM reminders. Expired/invalid codes are rejected. When the bot is added to a guild, it auto-DMs the owner with these steps.
-- `/remind`, `/due-soon`, `/task-today` — work in DMs and guilds, respect the link (fallback to Discord user ID if not linked).
+- **Install:** Discord Developer Portal → Installation → Default Install Settings → **Guild Install** only (`bot` + `applications.commands`, `Guild` context). Invite to your guild.
+- **Link:** In Open WebUI run the `link.create` tool → 6-digit code (10 min, single-use). Then in a **guild channel** run `/buddytrails-verify code:<code>` → creates `openwebui_user_id → discord_user_id`.
+- **Notifications:** Hourly 3★ `due_soon` DMs to linked users (via `user_discord_link`); verify also sends a DM confirmation. No other slash commands; no User Install.
 
 ## 7. Verify
 
@@ -106,6 +104,6 @@ DB file `buddytrails.db` is created on first run. Single file, no cloud sync. Ex
 
 - **Private tools return `Missing X-User-Id`** — check Open WebUI Headers JSON is `{"X-User-Id": "{{USER_ID}}"}` (not `{{USER_ID}}` without quotes, not empty).
 - **SSE `Failed to connect`** — use Streamable HTTP `/mcp` instead; SSE is legacy.
-- **Discord DMs not arriving** — in Open WebUI run `link.create`, then in Discord `/buddytrails-verify code:<code>`, then create a 3★ task with deadline today.
+- **Discord DMs not arriving** — in Open WebUI run `link.create`, then in a guild channel run `/buddytrails-verify code:<code>`, then create a 3★ task with deadline today (hourly scheduler).
 - **Verify says invalid/expired** — codes are 10 min single-use; run `link.create` again for a fresh code.
 - **Tests fail with 0 tasks** — ensure `vitest.config.ts` has `pool: "forks"` and `fileParallelism: false` (shared `_db`).

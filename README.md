@@ -8,7 +8,7 @@ Single local MCP server with three namespaces — **Knowledge Hook DB**, **Have-
 - **Have-Idea** — lightweight idea capture with semantic `suggest` when stuck
 - **Work Task** — daily tasks with 3★ priority, deadline, estimate; Raw Task Data two-step enrichment (paste titles → assign priority/estimate); time-blocked Work Schedule + Suggest Next
 - **Auto-skills** — `knowledge.summarize`/`export`/`retag`, `idea.brainstorm`/`cluster`/`refine`, `task.breakdown`/`pomodoro`/`time_log`, `brief.daily`/`weekly`, `search.all` — all via function-calling (slash aliases remain)
-- **Discord bot** — `DISCORD_TOKEN`, `/buddytrails-setup`, `/buddytrails-verify` (code flow), hourly 3★ DM per linked user, `remind`/`due_soon`, auto-welcome on add
+- **Discord bot** — `DISCORD_TOKEN`, guild-only `/buddytrails-verify` (code flow), hourly 3★ DM per linked user
 - **Multi-account** — Open WebUI Custom Headers (`X-User-Id: {{USER_ID}}`/`{{USER_EMAIL}}`), Knowledge shared, Ideas/Tasks private per user, `stdio` = `local`; link via `link.create` (Open WebUI) → `/buddytrails-verify` (Discord)
 
 ## Requirements
@@ -57,14 +57,14 @@ npm run start:http
 
 Open WebUI: Settings → Admin → Integrations → External Tool Servers → Type **MCP (Streamable HTTP)** → URL `http://host.docker.internal:3000/mcp` (or `http://localhost:3000/mcp` if not in Docker) → Headers `{"X-User-Id": "{{USER_ID}}"} ` or `{"X-User-Id": "{{USER_EMAIL}}"}` (see https://docs.openwebui.com/features/extensibility/mcp/#custom-headers). Add a **Today** button calling `task.get_today_schedule`. Knowledge is shared; Ideas/Tasks are isolated per `X-User-Id`. Copilot `stdio` uses `user_id = "local"`.
 
-### Discord Bot
+### Discord Bot (guild-only)
 
 ```bash
 DISCORD_TOKEN=... node dist/discord/bot.js
 ```
 
-- `/buddytrails-setup` — **works in DMs and guilds** — guild channel or DM for hourly 3★ reminders (DM: no guild needed, `DM:<userId>`).
-- `link.create` (Open WebUI tool) → `/buddytrails-verify code:<6-digit>` (Discord, **works in DMs, no guild needed**) — link your Open WebUI `X-User-Id` to Discord for per-user 3★ DM reminders. Code is 6-digit, 10 min expiry, single-use. Auto-welcome DM on bot add explains the flow.
+- Guild Install only (`Guild` context) — invite to your guild.
+- `link.create` (Open WebUI) → `/buddytrails-verify code:<6-digit>` (in a **guild channel**) — links `X-User-Id` → Discord for hourly 3★ DM reminders (10 min, single-use, DM confirmation).
 
 ## MCP Tools
 
