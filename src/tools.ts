@@ -364,33 +364,10 @@ export const tools: ToolDef[] = [
     inputSchema: z.object({ workingWindow: z.object({ start: z.string().optional(), end: z.string().optional() }).optional() }),
     handler: async ({ workingWindow }) => {
       const db = getDb();
+      const { schedule } = await import("./scheduler.js");
       const today = new Date().toISOString().slice(0, 10);
-      const rows = db.prepare(`SELECT * FROM tasks WHERE status != 'done' AND (deadline = ? OR (priority = 3 AND deadline < ?)) ORDER BY priority DESC, deadline ASC, estimate_minutes ASC`).all(today, today) as any[];
-      // Also include tasks due today without priority filter
-      const todayRows = db.prepare(`SELECT * FROM tasks WHERE status != 'done' AND deadline = ? ORDER BY priority DESC, estimate_minutes ASC`).all(today) as any[];
-      const merged = new Map<string, any>();
-      for (const r of [...rows, ...todayRows]) merged.set(r.id, r);
-      const tasks = [...merged.values()].sort((a, b) => b.priority - a.priority || (a.deadline || "").localeCompare(b.deadline || "") || (a.estimate_minutes || 0) - (b.estimate_minutes || 0));
-      const start = workingWindow?.start ?? "09:00";
-      const end = workingWindow?.end ?? "18:00";
-      const toMin = (s: string) => { const [h, m] = s.split(":").map(Number); return h * 60 + m; };
-      const startMin = toMin(start);
-      const endMin = toMin(end);
-      const windowMin = endMin - startMin;
-      let cursor = startMin;
-      const blocks: any[] = [];
-      let total = 0;
-      for (const t of tasks) {
-        const est = t.estimate_minutes ?? 30;
-        total += est;
-        const blockStart = cursor;
-        const blockEnd = cursor + est;
-        blocks.push({ taskId: t.id, title: t.title, priority: t.priority, start: `${String(Math.floor(blockStart / 60)).padStart(2, "0")}:${String(blockStart % 60).padStart(2, "0")}`, end: `${String(Math.floor(blockEnd / 60)).padStart(2, "0")}:${String(blockEnd % 60).padStart(2, "0")}`, estimate_minutes: est });
-        cursor = blockEnd + 10; // 10 min break
-      }
-      const totalWithBreaks = blocks.length > 0 ? total + 10 * (blocks.length - 1) : 0;
-      const overflow = totalWithBreaks > windowMin;
-      return { date: today, workingWindow: { start, end }, tasks: tasks.length, total_minutes: total, total_with_breaks: totalWithBreaks, window_minutes: windowMin, overflow, warning: overflow ? `Overflow by ${totalWithBreaks - windowMin} minutes` : null, blocks };
+      const rows = db.prepare(`SELECT * FROM tasks WHERE status != 'done'`).all() as any[];
+      return schedule(rows, workingWindow ?? { start: "09:00", end: "18:00" }, today);
     },
   },
   {
