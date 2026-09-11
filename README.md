@@ -58,10 +58,10 @@ Open WebUI: add Tools pointing at `http://localhost:3000`, add a **Today** butto
 ### Discord Bot
 
 ```bash
-DISCORD_TOKEN=... DISCORD_GUILD_ID=... DISCORD_CHANNEL_ID=... node dist/discord/bot.js
+DISCORD_TOKEN=... node dist/discord/bot.js
 ```
 
-Run `/buddytrails-setup` in your guild to register slash commands and verify channel access. Hourly scheduler DMs/pings 3★ tasks due in 24h or overdue.
+Run `/buddytrails-setup` in any guild text channel to save that guild/channel (stored in `discord_settings` table). Hourly 3★ reminders post there. Re-run to move it.
 
 ## MCP Tools
 

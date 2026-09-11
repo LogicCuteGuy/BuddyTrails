@@ -1,9 +1,8 @@
 import { Client, GatewayIntentBits, Events, SlashCommandBuilder, REST, Routes } from "discord.js";
 import { tools } from "../tools.js";
+import { getDb } from "../db.js";
 
 const token = process.env.DISCORD_TOKEN;
-const guildId = process.env.DISCORD_GUILD_ID;
-const channelId = process.env.DISCORD_CHANNEL_ID;
 
 if (!token) {
   console.error("DISCORD_TOKEN not set — bot not starting");
@@ -21,26 +20,27 @@ const commands = [
 
 client.once(Events.ClientReady, async () => {
   console.error(`Discord bot ready as ${client.user?.tag}`);
-  if (guildId) {
+  try {
     const rest = new REST({ version: "10" }).setToken(token);
-    await rest.put(Routes.applicationGuildCommands(client.user!.id, guildId), { body: commands });
-    console.error(`Registered guild commands for ${guildId}`);
-  }
-  // Hourly scheduler for 3★ due/overdue
+    await rest.put(Routes.applicationCommands(client.user!.id), { body: commands });
+    console.error(`Registered global commands`);
+  } catch (e) { console.error("Failed to register commands", e); }
+  // Hourly scheduler for 3★ due/overdue — per guild/channel from DB
   setInterval(async () => {
     try {
       const dueSoon = tools.find(t => t.name === "task.due_soon")!;
       const res = await dueSoon.handler({ within: "24h" }) as any;
       const urgent = (res.tasks || []).filter((t: any) => t.priority === 3);
-      if (urgent.length > 0) {
-        const msg = `⏰ ${urgent.length} 3★ task(s) due soon:\n` + urgent.map((t: any) => `- ${t.title} (due ${t.deadline})`).join("\n");
-        if (channelId) {
-          const ch = await client.channels.fetch(channelId) as any;
+      if (urgent.length === 0) return;
+      const msg = `⏰ ${urgent.length} 3★ task(s) due soon:\n` + urgent.map((t: any) => `- ${t.title} (due ${t.deadline})`).join("\n");
+      const db = getDb();
+      const rows = db.prepare(`SELECT guild_id, channel_id FROM discord_settings`).all() as any[];
+      if (rows.length === 0) { console.error(msg); return; }
+      for (const r of rows) {
+        try {
+          const ch = await client.channels.fetch(r.channel_id) as any;
           if (ch?.send) await ch.send(msg);
-        } else {
-          // DM fallback — try owner
-          console.error(msg);
-        }
+        } catch (e) { console.error(`Failed to send to ${r.channel_id}`, e); }
       }
     } catch (e) { console.error("Scheduler error", e); }
   }, 60 * 60 * 1000);
@@ -49,7 +49,13 @@ client.once(Events.ClientReady, async () => {
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   if (interaction.commandName === "buddytrails-setup") {
-    await interaction.reply(`Guild: ${interaction.guildId}\nChannel: ${interaction.channelId}\nSet DISCORD_GUILD_ID=${interaction.guildId} DISCORD_CHANNEL_ID=${interaction.channelId}`);
+    const gid = interaction.guildId;
+    const cid = interaction.channelId;
+    if (!gid || !cid) { await interaction.reply("Run this inside a guild text channel."); return; }
+    const db = getDb();
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO discord_settings (guild_id, channel_id, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id, updated_at=excluded.updated_at`).run(gid, cid, now, now);
+    await interaction.reply(`✅ BuddyTrails setup saved\nGuild: ${gid}\nChannel: <#${cid}> (${cid})\nHourly 3★ reminders will post here. Re-run in another channel to move it.`);
   } else if (interaction.commandName === "remind") {
     const taskId = interaction.options.getString("task_id", true);
     const at = interaction.options.getString("at", true);
