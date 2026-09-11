@@ -1,0 +1,5 @@
+node_modules
+dist
+buddytrails.db
+*.db
+.env

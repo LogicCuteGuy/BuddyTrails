@@ -1,0 +1,33 @@
+{
+  "name": "buddytrails-mcp",
+  "version": "0.1.0",
+  "description": "MCP Knowledge Hook DB + Have-Idea + Work Task for GitHub Copilot & Open WebUI",
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "dev:stdio": "tsx src/transports/stdio.ts",
+    "dev:http": "tsx src/transports/http.ts",
+    "start:stdio": "node dist/transports/stdio.js",
+    "start:http": "node dist/transports/http.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.1",
+    "zod": "^3.23.8",
+    "discord.js": "^14.16.3"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.7.0",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  }
+}

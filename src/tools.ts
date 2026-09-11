@@ -1,0 +1,535 @@
+import { z } from "zod";
+import { getDb } from "./db.js";
+import { embed } from "./embed.js";
+import { randomUUID } from "node:crypto";
+
+// Tool definitions — stubbed for scaffold, real logic in later tickets.
+// Each tool validates via zod and returns structured result.
+
+export type ToolDef = {
+  name: string;
+  description: string;
+  inputSchema: z.ZodTypeAny;
+  handler: (input: any) => Promise<any>;
+};
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+export const tools: ToolDef[] = [
+  // knowledge.*
+  {
+    name: "knowledge.ingest",
+    description: "Ingest text into Knowledge Hook DB (stubbed)",
+    inputSchema: z.object({ text: z.string().min(1), source: z.string().optional(), tags: z.array(z.string()).optional() }),
+    handler: async ({ text, source, tags }) => {
+      const db = getDb();
+      const id = randomUUID();
+      const emb = embed(text);
+      const summary = text.slice(0, 120);
+      const tagStr = JSON.stringify(tags ?? []);
+      db.prepare(`INSERT INTO knowledge_entries (id, raw_text, summary, tags, embedding, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+        id, text, summary, tagStr, Buffer.from(emb.buffer, emb.byteOffset, emb.byteLength), source ?? "manual", nowIso()
+      );
+      try {
+        db.prepare(`INSERT INTO knowledge_vec (id, embedding) VALUES (?, ?)`).run(id, Buffer.from(emb.buffer, emb.byteOffset, emb.byteLength));
+      } catch {}
+      return { id, summary, tags: tags ?? [] };
+    },
+  },
+  {
+    name: "knowledge.search",
+    description: "Semantic search Knowledge Entries",
+    inputSchema: z.object({ query: z.string().min(1), limit: z.number().int().min(1).max(50).optional(), source: z.string().optional() }),
+    handler: async ({ query, limit = 5, source }) => {
+      const db = getDb();
+      const qEmb = embed(query);
+      const rows = db.prepare(`SELECT id, raw_text, summary, tags, embedding, source, created_at FROM knowledge_entries ${source ? "WHERE source = ?" : ""} ORDER BY created_at DESC LIMIT 100`).all(...(source ? [source] : [])) as any[];
+      const scored = rows.map((r) => {
+        let score = 0;
+        if (r.embedding) {
+          try {
+            const emb = new Float32Array(r.embedding.buffer.slice(r.embedding.byteOffset, r.embedding.byteOffset + r.embedding.byteLength));
+            let dot = 0;
+            for (let i = 0; i < qEmb.length; i++) dot += qEmb[i] * emb[i];
+            score = dot;
+          } catch {}
+        }
+        const qLower2 = query.toLowerCase();
+        const tLower2 = (r.raw_text || "").toLowerCase();
+        for (const w of qLower2.split(/\s+/)) if (w.length>2 && tLower2.includes(w)) score += 1;
+        return { ...r, score, tags: r.tags ? JSON.parse(r.tags) : [] };
+      });
+      scored.sort((a, b) => b.score - a.score);
+      return { results: scored.slice(0, limit) };
+    },
+  },
+  {
+    name: "knowledge.get",
+    description: "Get Knowledge Entry by id",
+    inputSchema: z.object({ id: z.string() }),
+    handler: async ({ id }) => {
+      const db = getDb();
+      const row = db.prepare(`SELECT * FROM knowledge_entries WHERE id = ?`).get(id) as any;
+      if (!row) throw new Error(`Knowledge entry not found: ${id}`);
+      return { ...row, tags: row.tags ? JSON.parse(row.tags) : [] };
+    },
+  },
+  {
+    name: "knowledge.delete",
+    description: "Delete Knowledge Entry",
+    inputSchema: z.object({ id: z.string() }),
+    handler: async ({ id }) => {
+      const db = getDb();
+      db.prepare(`DELETE FROM knowledge_entries WHERE id = ?`).run(id);
+      try { db.prepare(`DELETE FROM knowledge_vec WHERE id = ?`).run(id); } catch {}
+      return { deleted: id };
+    },
+  },
+  {
+    name: "knowledge.summarize",
+    description: "Summarize top-K hits for query (stub)",
+    inputSchema: z.object({ query: z.string(), topK: z.number().optional() }),
+    handler: async ({ query, topK = 5 }) => {
+      const db = getDb();
+      const rows = db.prepare(`SELECT raw_text FROM knowledge_entries ORDER BY created_at DESC LIMIT ?`).all(topK) as any[];
+      return { query, summary: rows.map((r) => r.raw_text.slice(0, 80)).join(" | ") || "(no entries)", sources: rows.length };
+    },
+  },
+  {
+    name: "knowledge.export",
+    description: "Export entries as markdown/json",
+    inputSchema: z.object({ format: z.enum(["markdown", "json"]).optional(), source: z.string().optional() }),
+    handler: async ({ format = "markdown", source }) => {
+      const db = getDb();
+      const rows = db.prepare(`SELECT * FROM knowledge_entries ${source ? "WHERE source = ?" : ""} ORDER BY created_at DESC`).all(...(source ? [source] : [])) as any[];
+      if (format === "json") return { format, count: rows.length, data: rows };
+      const md = rows.map((r) => `## ${r.id}\n${r.raw_text}\n`).join("\n");
+      return { format, count: rows.length, data: md };
+    },
+  },
+  {
+    name: "knowledge.retag",
+    description: "Merge/dedupe tags",
+    inputSchema: z.object({ from: z.string(), to: z.string() }),
+    handler: async ({ from, to }) => {
+      const db = getDb();
+      const rows = db.prepare(`SELECT id, tags FROM knowledge_entries`).all() as any[];
+      let updated = 0;
+      for (const r of rows) {
+        const tags: string[] = r.tags ? JSON.parse(r.tags) : [];
+        if (tags.includes(from)) {
+          const next = [...new Set(tags.map((t) => (t === from ? to : t)))];
+          db.prepare(`UPDATE knowledge_entries SET tags = ? WHERE id = ?`).run(JSON.stringify(next), r.id);
+          updated++;
+        }
+      }
+      return { updated };
+    },
+  },
+  // idea.*
+  {
+    name: "idea.capture",
+    description: "Capture an idea",
+    inputSchema: z.object({ text: z.string().min(1), tags: z.array(z.string()).optional(), context: z.string().optional() }),
+    handler: async ({ text, tags, context }) => {
+      const db = getDb();
+      const id = randomUUID();
+      const emb = embed(text);
+      db.prepare(`INSERT INTO ideas (id, text, tags, context, embedding, created_at, promoted_task_id) VALUES (?, ?, ?, ?, ?, ?, NULL)`).run(
+        id, text, JSON.stringify(tags ?? []), context ?? null, Buffer.from(emb.buffer, emb.byteOffset, emb.byteLength), nowIso()
+      );
+      try { db.prepare(`INSERT INTO ideas_vec (id, embedding) VALUES (?, ?)`).run(id, Buffer.from(emb.buffer, emb.byteOffset, emb.byteLength)); } catch {}
+      return { id, text, tags: tags ?? [] };
+    },
+  },
+  {
+    name: "idea.suggest",
+    description: "Suggest ideas by semantic search",
+    inputSchema: z.object({ query: z.string().optional(), limit: z.number().optional() }),
+    handler: async ({ query, limit = 5 }) => {
+      const db = getDb();
+      const rows = db.prepare(`SELECT * FROM ideas ORDER BY created_at DESC LIMIT 100`).all() as any[];
+      if (!query) return { results: rows.slice(0, limit).map((r) => ({ ...r, tags: JSON.parse(r.tags || "[]"), score: 0 })) };
+      const qEmb = embed(query);
+      const scored = rows.map((r) => {
+        let score = 0;
+        if (r.embedding) {
+          try {
+            const emb = new Float32Array(r.embedding.buffer.slice(r.embedding.byteOffset, r.embedding.byteOffset + r.embedding.byteLength));
+            let dot = 0;
+            for (let i = 0; i < qEmb.length; i++) dot += qEmb[i] * emb[i];
+            score = dot;
+          } catch {}
+        }
+        // Keyword boost for scaffold (real model will be semantic)
+        const qLower = query.toLowerCase();
+        const tLower = (r.text || "").toLowerCase();
+        for (const w of qLower.split(/\s+/)) if (w.length>2 && tLower.includes(w)) score += 1;
+        return { ...r, tags: JSON.parse(r.tags || "[]"), score };
+      });
+      scored.sort((a, b) => b.score - a.score);
+      return { results: scored.slice(0, limit) };
+    },
+  },
+  {
+    name: "idea.list",
+    description: "List ideas",
+    inputSchema: z.object({ limit: z.number().optional() }),
+    handler: async ({ limit = 20 }) => {
+      const db = getDb();
+      const rows = db.prepare(`SELECT * FROM ideas ORDER BY created_at DESC LIMIT ?`).all(limit) as any[];
+      return { ideas: rows.map((r) => ({ ...r, tags: JSON.parse(r.tags || "[]") })) };
+    },
+  },
+  {
+    name: "idea.delete",
+    description: "Delete idea",
+    inputSchema: z.object({ id: z.string() }),
+    handler: async ({ id }) => {
+      const db = getDb();
+      db.prepare(`DELETE FROM ideas WHERE id = ?`).run(id);
+      try { db.prepare(`DELETE FROM ideas_vec WHERE id = ?`).run(id); } catch {}
+      return { deleted: id };
+    },
+  },
+  {
+    name: "idea.promote_to_task",
+    description: "Promote idea to task",
+    inputSchema: z.object({ id: z.string(), priority: z.number().optional(), deadline: z.string().optional() }),
+    handler: async ({ id, priority = 2, deadline }) => {
+      const db = getDb();
+      const idea = db.prepare(`SELECT * FROM ideas WHERE id = ?`).get(id) as any;
+      if (!idea) throw new Error(`Idea not found: ${id}`);
+      const taskId = randomUUID();
+      db.prepare(`INSERT INTO tasks (id, title, description, priority, deadline, estimate_minutes, status, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        taskId, idea.text.slice(0, 120), idea.text, priority, deadline ?? null, 30, "todo", "idea", nowIso()
+      );
+      db.prepare(`UPDATE ideas SET promoted_task_id = ? WHERE id = ?`).run(taskId, id);
+      return { taskId, ideaId: id };
+    },
+  },
+  {
+    name: "idea.brainstorm",
+    description: "Brainstorm ideas (stub)",
+    inputSchema: z.object({ prompt: z.string(), count: z.number().optional() }),
+    handler: async ({ prompt, count = 3 }) => {
+      const db = getDb();
+      const ids: string[] = [];
+      for (let i = 0; i < count; i++) {
+        const text = `${prompt} — idea ${i + 1}`;
+        const id = randomUUID();
+        const emb = embed(text);
+        db.prepare(`INSERT INTO ideas (id, text, tags, context, embedding, created_at, promoted_task_id) VALUES (?, ?, ?, ?, ?, ?, NULL)`).run(
+          id, text, JSON.stringify(["brainstorm"]), prompt, Buffer.from(emb.buffer, emb.byteOffset, emb.byteLength), nowIso()
+        );
+        ids.push(id);
+      }
+      return { prompt, count, ids };
+    },
+  },
+  {
+    name: "idea.cluster",
+    description: "Cluster ideas by embedding",
+    inputSchema: z.object({}),
+    handler: async () => {
+      const db = getDb();
+      const rows = db.prepare(`SELECT id, text FROM ideas`).all() as any[];
+      // Stub: single cluster
+      return { clusters: [{ ids: rows.map((r) => r.id), size: rows.length }] };
+    },
+  },
+  {
+    name: "idea.refine",
+    description: "Refine idea",
+    inputSchema: z.object({ id: z.string(), instruction: z.string() }),
+    handler: async ({ id, instruction }) => {
+      const db = getDb();
+      const idea = db.prepare(`SELECT * FROM ideas WHERE id = ?`).get(id) as any;
+      if (!idea) throw new Error(`Idea not found: ${id}`);
+      const newText = `${idea.text} [refined: ${instruction}]`;
+      const emb = embed(newText);
+      db.prepare(`UPDATE ideas SET text = ?, embedding = ? WHERE id = ?`).run(newText, Buffer.from(emb.buffer, emb.byteOffset, emb.byteLength), id);
+      return { id, text: newText };
+    },
+  },
+  // task.*
+  {
+    name: "task.create",
+    description: "Create a task",
+    inputSchema: z.object({
+      title: z.string().min(1),
+      description: z.string().optional(),
+      priority: z.number().int().min(1).max(3),
+      deadline: z.string().optional(),
+      estimate_minutes: z.number().int().min(1).optional(),
+      status: z.enum(["todo", "doing", "done"]).optional(),
+      source: z.string().optional(),
+    }),
+    handler: async ({ title, description, priority, deadline, estimate_minutes, status = "todo", source }) => {
+      const db = getDb();
+      const id = randomUUID();
+      db.prepare(`INSERT INTO tasks (id, title, description, priority, deadline, estimate_minutes, status, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        id, title, description ?? null, priority, deadline ?? null, estimate_minutes ?? null, status, source ?? "manual", nowIso()
+      );
+      return { id, title, priority, status };
+    },
+  },
+  {
+    name: "task.ingest_raw",
+    description: "Ingest raw task items",
+    inputSchema: z.object({ items: z.array(z.string().min(1)).min(1) }),
+    handler: async ({ items }) => {
+      const db = getDb();
+      const out: any[] = [];
+      for (const raw of items) {
+        const temp_id = randomUUID();
+        db.prepare(`INSERT INTO raw_task_items (temp_id, raw_text, created_at) VALUES (?, ?, ?)`).run(temp_id, raw, nowIso());
+        out.push({ temp_id, raw_text: raw });
+      }
+      return { items: out };
+    },
+  },
+  {
+    name: "task.enrich_raw",
+    description: "Enrich raw items into tasks",
+    inputSchema: z.object({ items: z.array(z.object({ temp_id: z.string(), priority: z.number().int().min(1).max(3), estimate_minutes: z.number().int().min(1) })) }),
+    handler: async ({ items }) => {
+      const db = getDb();
+      const created: any[] = [];
+      for (const it of items) {
+        const raw = db.prepare(`SELECT raw_text FROM raw_task_items WHERE temp_id = ?`).get(it.temp_id) as any;
+        if (!raw) throw new Error(`Raw item not found: ${it.temp_id}`);
+        const id = randomUUID();
+        db.prepare(`INSERT INTO tasks (id, title, description, priority, deadline, estimate_minutes, status, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+          id, raw.raw_text.slice(0, 120), raw.raw_text, it.priority, null, it.estimate_minutes, "todo", "raw", nowIso()
+        );
+        db.prepare(`DELETE FROM raw_task_items WHERE temp_id = ?`).run(it.temp_id);
+        created.push({ id, title: raw.raw_text.slice(0, 120), priority: it.priority, estimate_minutes: it.estimate_minutes });
+      }
+      return { created };
+    },
+  },
+  {
+    name: "task.update",
+    description: "Update task",
+    inputSchema: z.object({ id: z.string(), status: z.enum(["todo", "doing", "done"]).optional(), priority: z.number().optional(), title: z.string().optional() }),
+    handler: async ({ id, status, priority, title }) => {
+      const db = getDb();
+      const sets: string[] = [];
+      const vals: any[] = [];
+      if (status) { sets.push("status = ?"); vals.push(status); }
+      if (priority) { sets.push("priority = ?"); vals.push(priority); }
+      if (title) { sets.push("title = ?"); vals.push(title); }
+      if (sets.length === 0) throw new Error("No fields to update");
+      vals.push(id);
+      db.prepare(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
+      return { id, updated: sets };
+    },
+  },
+  {
+    name: "task.list",
+    description: "List tasks",
+    inputSchema: z.object({ status: z.string().optional(), priority: z.number().optional(), limit: z.number().optional() }),
+    handler: async ({ status, priority, limit = 50 }) => {
+      const db = getDb();
+      let sql = `SELECT * FROM tasks WHERE 1=1`;
+      const vals: any[] = [];
+      if (status) { sql += ` AND status = ?`; vals.push(status); }
+      if (priority) { sql += ` AND priority = ?`; vals.push(priority); }
+      sql += ` ORDER BY priority DESC, deadline ASC LIMIT ?`;
+      vals.push(limit);
+      const rows = db.prepare(sql).all(...vals) as any[];
+      return { tasks: rows };
+    },
+  },
+  {
+    name: "task.delete",
+    description: "Delete task",
+    inputSchema: z.object({ id: z.string() }),
+    handler: async ({ id }) => {
+      const db = getDb();
+      db.prepare(`DELETE FROM tasks WHERE id = ?`).run(id);
+      return { deleted: id };
+    },
+  },
+  {
+    name: "task.get_today_schedule",
+    description: "Get today's time-blocked schedule",
+    inputSchema: z.object({ workingWindow: z.object({ start: z.string().optional(), end: z.string().optional() }).optional() }),
+    handler: async ({ workingWindow }) => {
+      const db = getDb();
+      const today = new Date().toISOString().slice(0, 10);
+      const rows = db.prepare(`SELECT * FROM tasks WHERE status != 'done' AND (deadline = ? OR (priority = 3 AND deadline < ?)) ORDER BY priority DESC, deadline ASC, estimate_minutes ASC`).all(today, today) as any[];
+      // Also include tasks due today without priority filter
+      const todayRows = db.prepare(`SELECT * FROM tasks WHERE status != 'done' AND deadline = ? ORDER BY priority DESC, estimate_minutes ASC`).all(today) as any[];
+      const merged = new Map<string, any>();
+      for (const r of [...rows, ...todayRows]) merged.set(r.id, r);
+      const tasks = [...merged.values()].sort((a, b) => b.priority - a.priority || (a.deadline || "").localeCompare(b.deadline || "") || (a.estimate_minutes || 0) - (b.estimate_minutes || 0));
+      const start = workingWindow?.start ?? "09:00";
+      const end = workingWindow?.end ?? "18:00";
+      const toMin = (s: string) => { const [h, m] = s.split(":").map(Number); return h * 60 + m; };
+      const startMin = toMin(start);
+      const endMin = toMin(end);
+      const windowMin = endMin - startMin;
+      let cursor = startMin;
+      const blocks: any[] = [];
+      let total = 0;
+      for (const t of tasks) {
+        const est = t.estimate_minutes ?? 30;
+        total += est;
+        const blockStart = cursor;
+        const blockEnd = cursor + est;
+        blocks.push({ taskId: t.id, title: t.title, priority: t.priority, start: `${String(Math.floor(blockStart / 60)).padStart(2, "0")}:${String(blockStart % 60).padStart(2, "0")}`, end: `${String(Math.floor(blockEnd / 60)).padStart(2, "0")}:${String(blockEnd % 60).padStart(2, "0")}`, estimate_minutes: est });
+        cursor = blockEnd + 10; // 10 min break
+      }
+      const overflow = total > windowMin;
+      return { date: today, workingWindow: { start, end }, tasks: tasks.length, total_minutes: total, window_minutes: windowMin, overflow, warning: overflow ? `Overflow by ${total - windowMin} minutes` : null, blocks };
+    },
+  },
+  {
+    name: "task.suggest_next",
+    description: "Suggest next task with related knowledge/ideas",
+    inputSchema: z.object({}),
+    handler: async () => {
+      const db = getDb();
+      const today = new Date().toISOString().slice(0, 10);
+      const task = db.prepare(`SELECT * FROM tasks WHERE status != 'done' ORDER BY priority DESC, deadline ASC LIMIT 1`).get() as any;
+      if (!task) return { task: null, relatedKnowledge: [], relatedIdeas: [] };
+      const kRows = db.prepare(`SELECT id, raw_text FROM knowledge_entries ORDER BY created_at DESC LIMIT 3`).all() as any[];
+      const iRows = db.prepare(`SELECT id, text FROM ideas ORDER BY created_at DESC LIMIT 3`).all() as any[];
+      return { task, relatedKnowledge: kRows, relatedIdeas: iRows };
+    },
+  },
+  {
+    name: "task.breakdown",
+    description: "Break down task into subtasks",
+    inputSchema: z.object({ id: z.string() }),
+    handler: async ({ id }) => {
+      const db = getDb();
+      const task = db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(id) as any;
+      if (!task) throw new Error(`Task not found: ${id}`);
+      const est = task.estimate_minutes ?? 60;
+      const per = Math.max(10, Math.floor(est / 3));
+      const created: any[] = [];
+      for (let i = 0; i < 3; i++) {
+        const nid = randomUUID();
+        db.prepare(`INSERT INTO tasks (id, title, description, priority, deadline, estimate_minutes, status, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+          nid, `${task.title} — subtask ${i + 1}`, `Part ${i + 1} of ${task.title}`, task.priority, task.deadline, per, "todo", "breakdown", nowIso()
+        );
+        created.push({ id: nid, title: `${task.title} — subtask ${i + 1}`, estimate_minutes: per });
+      }
+      return { parentId: id, subtasks: created };
+    },
+  },
+  {
+    name: "task.pomodoro",
+    description: "Pomodoro timer",
+    inputSchema: z.object({ id: z.string(), action: z.enum(["start", "pause", "done"]) }),
+    handler: async ({ id, action }) => {
+      const db = getDb();
+      if (action === "start") {
+        const sid = randomUUID();
+        db.prepare(`INSERT INTO pomodoro_sessions (id, task_id, started_at, ended_at, duration_minutes) VALUES (?, ?, ?, NULL, NULL)`).run(sid, id, nowIso());
+        return { sessionId: sid, action, taskId: id };
+      }
+      if (action === "done") {
+        const sess = db.prepare(`SELECT * FROM pomodoro_sessions WHERE task_id = ? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1`).get(id) as any;
+        if (!sess) throw new Error("No active pomodoro");
+        const duration = 25;
+        db.prepare(`UPDATE pomodoro_sessions SET ended_at = ?, duration_minutes = ? WHERE id = ?`).run(nowIso(), duration, sess.id);
+        return { sessionId: sess.id, action, duration_minutes: duration };
+      }
+      return { action, taskId: id };
+    },
+  },
+  {
+    name: "task.time_log",
+    description: "Time log actual vs estimate",
+    inputSchema: z.object({ id: z.string().optional() }),
+    handler: async ({ id }) => {
+      const db = getDb();
+      if (id) {
+        const task = db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(id) as any;
+        const sessions = db.prepare(`SELECT * FROM pomodoro_sessions WHERE task_id = ?`).all(id) as any[];
+        const actual = sessions.reduce((s: number, r: any) => s + (r.duration_minutes || 0), 0);
+        return { taskId: id, estimate_minutes: task?.estimate_minutes ?? null, actual_minutes: actual, sessions };
+      }
+      const tasks = db.prepare(`SELECT * FROM tasks`).all() as any[];
+      return { tasks: tasks.map((t: any) => ({ id: t.id, title: t.title, estimate_minutes: t.estimate_minutes })) };
+    },
+  },
+  {
+    name: "task.remind",
+    description: "Schedule reminder",
+    inputSchema: z.object({ taskId: z.string(), at: z.string(), channel: z.string().optional() }),
+    handler: async ({ taskId, at, channel }) => {
+      const db = getDb();
+      const id = randomUUID();
+      db.prepare(`INSERT INTO reminders (id, task_id, at, channel, created_at) VALUES (?, ?, ?, ?, ?)`).run(id, taskId, at, channel ?? null, nowIso());
+      return { id, taskId, at };
+    },
+  },
+  {
+    name: "task.due_soon",
+    description: "Tasks due soon",
+    inputSchema: z.object({ within: z.string().optional() }),
+    handler: async ({ within = "24h" }) => {
+      const db = getDb();
+      const hours = within === "3d" ? 72 : 24;
+      const cutoff = new Date(Date.now() + hours * 3600 * 1000).toISOString().slice(0, 10);
+      const today = new Date().toISOString().slice(0, 10);
+      const rows = db.prepare(`SELECT * FROM tasks WHERE status != 'done' AND deadline IS NOT NULL AND deadline >= ? AND deadline <= ? ORDER BY priority DESC, deadline ASC`).all(today, cutoff) as any[];
+      return { within, cutoff, tasks: rows };
+    },
+  },
+  {
+    name: "brief.daily",
+    description: "Daily brief",
+    inputSchema: z.object({}),
+    handler: async () => {
+      const db = getDb();
+      const today = new Date().toISOString().slice(0, 10);
+      const tasks = db.prepare(`SELECT * FROM tasks WHERE status != 'done' AND (deadline = ? OR (priority = 3 AND deadline < ?)) ORDER BY priority DESC LIMIT 5`).all(today, today) as any[];
+      const ideas = db.prepare(`SELECT * FROM ideas ORDER BY created_at DESC LIMIT 3`).all() as any[];
+      const knowledge = db.prepare(`SELECT * FROM knowledge_entries ORDER BY created_at DESC LIMIT 3`).all() as any[];
+      return { date: today, tasks, topIdeas: ideas, relatedKnowledge: knowledge };
+    },
+  },
+  {
+    name: "brief.weekly",
+    description: "Weekly review",
+    inputSchema: z.object({}),
+    handler: async () => {
+      const db = getDb();
+      const done = db.prepare(`SELECT * FROM tasks WHERE status = 'done' ORDER BY created_at DESC LIMIT 10`).all() as any[];
+      const overdue = db.prepare(`SELECT * FROM tasks WHERE status != 'done' AND deadline < date('now') ORDER BY priority DESC`).all() as any[];
+      const ideas = db.prepare(`SELECT * FROM ideas ORDER BY created_at DESC LIMIT 10`).all() as any[];
+      return { done, overdue, ideas };
+    },
+  },
+  {
+    name: "search.all",
+    description: "Unified search",
+    inputSchema: z.object({ query: z.string() }),
+    handler: async ({ query }) => {
+      const qEmb = embed(query);
+      const db = getDb();
+      const kRows = db.prepare(`SELECT id, raw_text FROM knowledge_entries LIMIT 20`).all() as any[];
+      const iRows = db.prepare(`SELECT id, text FROM ideas LIMIT 20`).all() as any[];
+      const tRows = db.prepare(`SELECT id, title FROM tasks LIMIT 20`).all() as any[];
+      return { query, knowledge: kRows.slice(0, 5), ideas: iRows.slice(0, 5), tasks: tRows.slice(0, 5) };
+    },
+  },
+  {
+    name: "health",
+    description: "Health check",
+    inputSchema: z.object({}),
+    handler: async () => ({ status: "ok", time: nowIso() }),
+  },
+];
+
+export function getTool(name: string): ToolDef | undefined {
+  return tools.find((t) => t.name === name);
+}
