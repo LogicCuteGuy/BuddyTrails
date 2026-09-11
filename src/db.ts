@@ -305,10 +305,17 @@ class MemDb implements Db {
           if (/user_id = \?/i.test(sql)) {
             const userId = vals[0];
             rows = rows.filter((r:any)=>r.user_id===userId);
+            // Find date params by scanning vals for YYYY-MM-DD (robust to LIMIT etc.)
             if (/start_date <= \?/i.test(sql) && /end_date >= \?/i.test(sql)) {
-              const today1 = vals[1];
-              const today2 = vals[2];
-              rows = rows.filter((r:any)=> r.start_date <= today1 && r.end_date >= today2);
+              const dateVals = vals.filter((v: any) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v));
+              if (dateVals.length >= 2) {
+                const today1 = dateVals[0];
+                const today2 = dateVals[1];
+                rows = rows.filter((r:any)=> r.start_date <= today1 && r.end_date >= today2);
+              } else if (dateVals.length === 1) {
+                const today = dateVals[0];
+                rows = rows.filter((r:any)=> r.start_date <= today && r.end_date >= today);
+              }
             }
           }
           if (/ORDER BY start_date ASC/i.test(sql)) rows.sort((a:any,b:any)=> a.start_date.localeCompare(b.start_date) || a.created_at.localeCompare(b.created_at));

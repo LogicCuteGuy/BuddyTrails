@@ -45,7 +45,7 @@ function parseEffect(raw: any): { skip?: boolean; window?: { start: string; end:
   }
   if (typeof raw !== "object" || Array.isArray(raw)) return {};
   const out: any = {};
-  if (typeof raw.skip === "boolean") out.skip = raw.skip;
+  if (raw.skip === true) out.skip = true;
   if (raw.window && typeof raw.window === "object" && typeof raw.window.start === "string" && typeof raw.window.end === "string") {
     out.window = { start: raw.window.start, end: raw.window.end };
   }
@@ -93,6 +93,88 @@ function validateCalendarBlock(input: { label: string; start_date: string; end_d
   const hasEffect = !!(eff.skip || eff.window || (eff.boost_tags && eff.boost_tags.length > 0));
   if (!hasEffect && !hasStart) return "effect or time required: provide effect.skip/window/boost_tags or start_time/end_time";
   return null;
+}
+
+const CALENDAR_KEYWORDS = ["ปิดเทอม", "สอบ", "หยุด", "ไปค่าย", "ลา"];
+const THAI_MONTHS: Record<string, string> = {
+  "ม.ค.": "01", "ก.พ.": "02", "มี.ค.": "03", "เม.ย.": "04", "พ.ค.": "05", "มิ.ย.": "06",
+  "ก.ค.": "07", "ส.ค.": "08", "ก.ย.": "09", "ต.ค.": "10", "พ.ย.": "11", "ธ.ค.": "12",
+  "มค": "01", "กพ": "02", "มีค": "03", "เมย": "04", "พค": "05", "มิย": "06",
+  "กค": "07", "สค": "08", "กย": "09", "ตค": "10", "พย": "11", "ธค": "12",
+};
+
+function detectCalendarBlock(text: string): { label: string; start_date: string; end_date: string; start_time?: string; end_time?: string; effect?: any } | null {
+  const hasKeyword = CALENDAR_KEYWORDS.some((k) => text.includes(k));
+  if (!hasKeyword) return null;
+  // Need a date pattern: YYYY-MM-DD, DD/MM, DD-MM, DD- DD, or Thai month
+  const now = new Date();
+  const year = now.getFullYear();
+  let start_date: string | null = null;
+  let end_date: string | null = null;
+
+  // Try YYYY-MM-DD range or single
+  const isoRange = text.match(/(\d{4}-\d{2}-\d{2})\s*[–—-]\s*(\d{4}-\d{2}-\d{2})/);
+  const isoSingle = text.match(/(\d{4}-\d{2}-\d{2})/);
+  if (isoRange) {
+    start_date = isoRange[1];
+    end_date = isoRange[2];
+  } else if (isoSingle) {
+    start_date = isoSingle[1];
+    end_date = isoSingle[1];
+  } else {
+    // Try DD/MM or DD-MM or DD- DD with optional Thai month
+    // e.g. 13-20 ต.ค., 13/10, 13-20
+    const thaiMonthPattern = Object.keys(THAI_MONTHS).join("|").replace(/\./g, "\\.");
+    const rangeThai = text.match(new RegExp(`(\\d{1,2})\\s*[-–]\\s*(\\d{1,2})\\s*(${thaiMonthPattern})`));
+    const singleThai = text.match(new RegExp(`(\\d{1,2})\\s*(${thaiMonthPattern})`));
+    const slashRange = text.match(/(\d{1,2})\/(\d{1,2})\s*[-–]\s*(\d{1,2})\/(\d{1,2})/);
+    const slashSingle = text.match(/(\d{1,2})\/(\d{1,2})/);
+    const dashRange = text.match(/(\d{1,2})\s*[-–]\s*(\d{1,2})(?!\d)/);
+    if (rangeThai) {
+      const m = THAI_MONTHS[rangeThai[3]];
+      start_date = `${year}-${m}-${String(rangeThai[1]).padStart(2, "0")}`;
+      end_date = `${year}-${m}-${String(rangeThai[2]).padStart(2, "0")}`;
+    } else if (singleThai) {
+      const m = THAI_MONTHS[singleThai[2]];
+      start_date = `${year}-${m}-${String(singleThai[1]).padStart(2, "0")}`;
+      end_date = start_date;
+    } else if (slashRange) {
+      start_date = `${year}-${String(slashRange[2]).padStart(2, "0")}-${String(slashRange[1]).padStart(2, "0")}`;
+      end_date = `${year}-${String(slashRange[4]).padStart(2, "0")}-${String(slashRange[3]).padStart(2, "0")}`;
+    } else if (slashSingle) {
+      start_date = `${year}-${String(slashSingle[2]).padStart(2, "0")}-${String(slashSingle[1]).padStart(2, "0")}`;
+      end_date = start_date;
+    } else if (dashRange) {
+      // Conservative: bare "13-20" without month is too ambiguous (e.g. "สอบ 1-2 คะแนน")
+      // Only accept if Thai month or slash context already failed, require explicit month — so skip bare dashRange
+      // This avoids false positive on "สอบ 1-2 คะแนน" -> 2026-MM-01 to 2026-MM-02
+    }
+  }
+  if (!start_date || !end_date) return null;
+  if (!isValidDate(start_date) || !isValidDate(end_date)) return null;
+  if (start_date > end_date) return null;
+
+  // Extract label: first keyword found
+  const label = CALENDAR_KEYWORDS.find((k) => text.includes(k)) ?? "block";
+  // Infer effect: ปิดเทอม/หยุด/ลา -> skip, สอบ -> boost_tags, ไปค่าย -> skip
+  let effect: any = {};
+  if (label === "ปิดเทอม" || label === "หยุด" || label === "ลา" || label === "ไปค่าย") effect = { skip: true };
+  else if (label === "สอบ") effect = { boost_tags: ["สอบ"] };
+
+  // Try to extract time HH:mm-HH:mm
+  const timeRange = text.match(/(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})/);
+  let start_time: string | undefined;
+  let end_time: string | undefined;
+  if (timeRange) {
+    const s = timeRange[1].padStart(5, "0");
+    const e = timeRange[2].padStart(5, "0");
+    if (isValidTime(s) && isValidTime(e) && s < e) {
+      start_time = s;
+      end_time = e;
+    }
+  }
+
+  return { label, start_date, end_date, ...(start_time ? { start_time, end_time } : {}), effect };
 }
 
 export const tools: ToolDef[] = [
@@ -480,7 +562,9 @@ export const tools: ToolDef[] = [
       const { schedule } = await import("./scheduler.js");
       const today = new Date().toISOString().slice(0, 10);
       const rows = db.prepare(`SELECT * FROM tasks WHERE status != 'done' AND user_id = ?`).all(userId) as any[];
-      return schedule(rows, workingWindow ?? { start: "09:00", end: "18:00" }, today);
+      const calRows = db.prepare(`SELECT * FROM calendar_blocks WHERE user_id = ? AND start_date <= ? AND end_date >= ? ORDER BY start_date ASC, created_at ASC`).all(userId, today, today) as any[];
+      const calBlocks = calRows.map((r: any) => ({ ...r, effect: parseEffect(r.effect) }));
+      return schedule(rows, workingWindow ?? { start: "09:00", end: "18:00" }, today, calBlocks);
     },
   },
   {
@@ -607,7 +691,10 @@ export const tools: ToolDef[] = [
       const tasks = db.prepare(`SELECT * FROM tasks WHERE status != 'done' AND user_id = ? AND (deadline = ? OR (priority = 3 AND deadline < ?)) ORDER BY priority DESC LIMIT 5`).all(userId, today, today) as any[];
       const ideas = db.prepare(`SELECT * FROM ideas WHERE user_id = ? ORDER BY created_at DESC LIMIT 3`).all(userId) as any[];
       const knowledge = db.prepare(`SELECT * FROM knowledge_entries ORDER BY created_at DESC LIMIT 3`).all() as any[];
-      return { date: today, tasks, topIdeas: ideas, relatedKnowledge: knowledge };
+      const calRows = db.prepare(`SELECT * FROM calendar_blocks WHERE user_id = ? AND start_date <= ? AND end_date >= ? ORDER BY start_date ASC, created_at ASC`).all(userId, today, today) as any[];
+      const activeBlocks = calRows.map((r: any) => ({ ...r, effect: parseEffect(r.effect) }));
+      const activeBlock = activeBlocks[0] ?? null;
+      return { date: today, tasks, topIdeas: ideas, relatedKnowledge: knowledge, activeBlock, activeBlocks };
     },
   },
   {
@@ -681,6 +768,18 @@ export const tools: ToolDef[] = [
       }
       const ingest = tools.find((t) => t.name === "knowledge.ingest")!;
       const result = await ingest.handler({ text, source: source ?? `turn:${role}`, conversation_id });
+      // Calendar Block detection (conservative, confirmation required, never auto-creates)
+      const detected = detectCalendarBlock(text);
+      if (detected) {
+        return {
+          ingested: result.id,
+          role,
+          conversation_id,
+          detectedCalendarBlock: detected,
+          needsConfirmation: true,
+          message: `เจอ '${detected.label} ${detected.start_date}–${detected.end_date}' จะสร้าง Calendar Block แบบ ${detected.effect?.skip ? "skip" : detected.effect?.window ? "window" : "boost"} ใช่ไหม? เรียก calendar.set เพื่อยืนยัน`,
+        };
+      }
       return { ingested: result.id, role, conversation_id };
     },
   },
