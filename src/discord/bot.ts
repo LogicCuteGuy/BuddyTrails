@@ -10,7 +10,7 @@ if (!token) {
   process.exit(0);
 }
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 function withGuildOnly(b: any) {
   return b.setIntegrationTypes(ApplicationIntegrationType.GuildInstall)

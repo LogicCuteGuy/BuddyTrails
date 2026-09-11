@@ -5,6 +5,8 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createMcpServer } from "../server.js";
 import { tools } from "../tools.js";
 import { extractUserIdFromHeaders, requestContext } from "../context.js";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
 
 const app = express();
 app.use(cors());
@@ -73,6 +75,88 @@ app.post("/messages", async (req, res) => {
     const userId = headerUser !== "anonymous" ? headerUser : (transport as any)._userId ?? "anonymous";
     await requestContext.run({ userId }, () => transport.handlePostMessage(req, res, req.body));
   } else res.status(404).end();
+});
+
+function getOpenApiSpec(req?: express.Request) {
+  const host = req ? `${req.protocol}://${req.get("host")}` : `http://localhost:${process.env.PORT || 3000}`;
+  const paths: any = {};
+  for (const t of tools) {
+    let schema: any = { type: "object", properties: {} };
+    try {
+      const { zodToJsonSchema } = require("zod-to-json-schema");
+      schema = zodToJsonSchema(t.inputSchema, { target: "openApi3" });
+      if (schema.$schema) delete schema.$schema;
+      if (schema.type !== "object") schema = { type: "object", properties: {} };
+    } catch {}
+    const path = `/tools/${t.name}`;
+    paths[path] = {
+      post: {
+        operationId: t.name,
+        summary: t.description,
+        description: t.description,
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema,
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "Successful response",
+            content: {
+              "application/json": {
+                schema: { type: "object" },
+              },
+            },
+          },
+          "400": { description: "Invalid input" },
+          "500": { description: "Server error" },
+        },
+      },
+    };
+  }
+  paths["/health"] = {
+    get: {
+      operationId: "health",
+      summary: "Health check",
+      responses: { "200": { description: "OK" } },
+    },
+  };
+  paths["/tools"] = {
+    get: {
+      operationId: "listTools",
+      summary: "List tools",
+      responses: { "200": { description: "OK" } },
+    },
+  };
+  return {
+    openapi: "3.0.0",
+    info: {
+      title: "BuddyTrails MCP",
+      version: "0.1.0",
+      description: "BuddyTrails MCP — Knowledge Hook DB, Have-Idea, Work Task. Single SQLite file. Use X-User-Id header for per-user isolation (Knowledge shared, Ideas/Tasks private).",
+    },
+    servers: [{ url: host }],
+    paths,
+  };
+}
+
+app.get("/openapi.json", (req, res) => {
+  res.json(getOpenApiSpec(req));
+});
+app.get("/openapi.yaml", (req, res) => {
+  res.type("text/yaml").send(JSON.stringify(getOpenApiSpec(req), null, 2));
+});
+// Open WebUI fetches the URL you enter — if you enter http://host:port, it expects OpenAPI JSON there too
+app.get("/", (req, res) => {
+  const accept = req.headers.accept || "";
+  if (accept.includes("text/html")) {
+    res.type("html").send(`<!doctype html><html><head><title>BuddyTrails MCP</title></head><body><h1>BuddyTrails MCP</h1><p>OpenAPI spec at <a href="/openapi.json">/openapi.json</a></p><p>Health at <a href="/health">/health</a></p><p>MCP at <code>POST /mcp</code></p></body></html>`);
+  } else {
+    res.json(getOpenApiSpec(req));
+  }
 });
 
 const port = Number(process.env.PORT || 3000);

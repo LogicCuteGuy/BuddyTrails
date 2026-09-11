@@ -26,9 +26,10 @@ export function createMcpServer(): Server {
     if (!tool) throw new Error(`Unknown tool: ${req.params.name}`);
     const parsed = tool.inputSchema.safeParse(req.params.arguments ?? {});
     if (!parsed.success) throw new Error(`Invalid input for ${tool.name}: ${parsed.error.message}`);
-    // If called via HTTP, userId is in AsyncLocalStorage; for stdio, default to "local"
+    // If called via HTTP, userId is in AsyncLocalStorage; for stdio, use BUDDYTRAILS_USER_ID env or "local"
     const ctx = requestContext.getStore();
-    const result = ctx ? await tool.handler(parsed.data) : await requestContext.run({ userId: "local" }, () => tool.handler(parsed.data));
+    const fallbackUserId = (process.env.BUDDYTRAILS_USER_ID || "").trim() || "local";
+    const result = ctx ? await tool.handler(parsed.data) : await requestContext.run({ userId: fallbackUserId }, () => tool.handler(parsed.data));
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   });
   return server;
