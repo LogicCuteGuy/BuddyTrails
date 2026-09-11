@@ -1,7 +1,19 @@
-import { Client, GatewayIntentBits, Events, SlashCommandBuilder, REST, Routes } from "discord.js";
+import { Client, GatewayIntentBits, Events, SlashCommandBuilder, REST, Routes, ApplicationIntegrationType, InteractionContextType } from "discord.js";
 import { tools } from "../tools.js";
 import { getDb } from "../db.js";
 import { runWithUser } from "../context.js";
+
+const WELCOME_MSG = `👋 Thanks for adding BuddyTrails!\n\n**Link your Open WebUI account (2 steps):**\n1. In Open WebUI, run the \`link.create\` tool — you'll get a 6-digit code (10 min, single-use).\n2. Here in Discord, run \`/buddytrails-verify code:<code>\` (works in DMs too, no guild needed).\n\nThen 3★ due-soon reminders will DM you. You can also run \`/buddytrails-setup\` in any guild text channel or in a DM to choose where guild reminders post.`;
+const welcomedUsers = new Set<string>();
+async function sendWelcomeDM(userId: string) {
+  if (welcomedUsers.has(userId)) return;
+  welcomedUsers.add(userId);
+  try {
+    const user = await client.users.fetch(userId);
+    await user.send(WELCOME_MSG);
+    console.error(`Welcome DM sent to user ${userId}`);
+  } catch (e) { console.error(`Welcome DM failed for ${userId}`, e); }
+}
 
 const token = process.env.DISCORD_TOKEN;
 
@@ -12,12 +24,16 @@ if (!token) {
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 
+function withUserInstall(b: any) {
+  return b.setIntegrationTypes(ApplicationIntegrationType.GuildInstall, ApplicationIntegrationType.UserInstall)
+    .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM, InteractionContextType.PrivateChannel);
+}
 const commands = [
-  new SlashCommandBuilder().setName("buddytrails-setup").setDescription("Setup BuddyTrails — guild channel or DM").setDMPermission(true),
-  new SlashCommandBuilder().setName("buddytrails-verify").setDescription("Verify Open WebUI link code (6-digit, 10 min)").addStringOption(o => o.setName("code").setDescription("6-digit code from Open WebUI link.create").setRequired(true)).setDMPermission(true),
-  new SlashCommandBuilder().setName("remind").setDescription("Schedule reminder").addStringOption(o => o.setName("task_id").setDescription("Task ID").setRequired(true)).addStringOption(o => o.setName("at").setDescription("ISO time").setRequired(true)),
-  new SlashCommandBuilder().setName("due-soon").setDescription("Tasks due soon").addStringOption(o => o.setName("within").setDescription("24h or 3d").setRequired(false)),
-  new SlashCommandBuilder().setName("task-today").setDescription("Today's schedule"),
+  withUserInstall(new SlashCommandBuilder().setName("buddytrails-setup").setDescription("Setup BuddyTrails — guild channel or DM").setDMPermission(true)),
+  withUserInstall(new SlashCommandBuilder().setName("buddytrails-verify").setDescription("Verify Open WebUI link code (6-digit, 10 min)").addStringOption(o => o.setName("code").setDescription("6-digit code from Open WebUI link.create").setRequired(true)).setDMPermission(true)),
+  withUserInstall(new SlashCommandBuilder().setName("remind").setDescription("Schedule reminder").addStringOption(o => o.setName("task_id").setDescription("Task ID").setRequired(true)).addStringOption(o => o.setName("at").setDescription("ISO time").setRequired(true))),
+  withUserInstall(new SlashCommandBuilder().setName("due-soon").setDescription("Tasks due soon").addStringOption(o => o.setName("within").setDescription("24h or 3d").setRequired(false))),
+  withUserInstall(new SlashCommandBuilder().setName("task-today").setDescription("Today's schedule")),
 ].map(c => c.toJSON());
 
 client.once(Events.ClientReady, async () => {
@@ -157,21 +173,33 @@ client.on(Events.MessageCreate, async (msg) => {
 // Auto welcome when bot is added to a guild — DM the adder/inviter if possible, else post in system channel
 client.on(Events.GuildCreate, async (guild) => {
   try {
-    const welcome = `👋 Thanks for adding BuddyTrails!\n\n**Link your Open WebUI account (2 steps):**\n1. In Open WebUI, run the \`link.create\` tool — you'll get a 6-digit code (10 min, single-use).\n2. Here in Discord, run \`/buddytrails-verify code:<code>\` (works in DMs too, no guild needed).\n\nThen 3★ due-soon reminders will DM you. You can also run \`/buddytrails-setup\` in any guild text channel or in a DM to choose where guild reminders post.`;
     // Try to DM the guild owner as best-effort inviter
     try {
       const owner = await guild.fetchOwner();
-      await owner.send(welcome);
+      await owner.send(WELCOME_MSG);
       console.error(`GuildCreate welcome DM sent to owner ${owner.id} for guild ${guild.id}`);
       return;
     } catch {}
     // Fallback: try system channel
     const ch = guild.systemChannel;
     if (ch?.isTextBased() && (ch as any).send) {
-      await (ch as any).send(welcome);
+      await (ch as any).send(WELCOME_MSG);
       console.error(`GuildCreate welcome sent to systemChannel for guild ${guild.id}`);
     }
   } catch (e) { console.error("GuildCreate welcome failed", e); }
+});
+
+// Auto welcome when a user installs the app (User Install) — DM on first interaction
+client.on(Events.InteractionCreate, async (interaction) => {
+  // Fire-and-forget welcome DM for user installs (authorizingIntegrationOwners indicates UserInstall)
+  try {
+    const owners = (interaction as any).authorizingIntegrationOwners as Record<string, string> | undefined;
+    const isUserInstall = owners && owners["1"] != null; // 1 = UserInstall
+    if (isUserInstall && interaction.user) {
+      // Don't await — let command handling proceed
+      void sendWelcomeDM(interaction.user.id);
+    }
+  } catch {}
 });
 
 client.login(token);
