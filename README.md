@@ -92,7 +92,11 @@ npm run dev:http    # tsx http
 
 ## Storage
 
-Single file `buddytrails.db` (SQLite, `BUDDYTRAILS_DB` env). Tables: `knowledge_entries`, `ideas`, `tasks`, `raw_task_items`, `reminders`, `pomodoro_sessions`, `conversation_settings`. Local-only, single-user, no cloud sync.
+Single file `buddytrails.db` (SQLite, `BUDDYTRAILS_DB` env). Tables: `knowledge_entries` (shared, `created_by` audit), `ideas`/`tasks`/`raw_task_items`/`reminders`/`pomodoro_sessions`/`conversation_settings` (private per `user_id`), `discord_settings`, `user_discord_link`. Existing DBs auto-migrated. Local-only, no cloud sync.
+
+## Setup Guide
+
+See [docs/SETUP.md](docs/SETUP.md) for full prerequisites, env, Copilot/Open WebUI/Discord setup, and troubleshooting.
 
 ## License
 
