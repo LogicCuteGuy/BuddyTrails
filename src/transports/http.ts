@@ -10,7 +10,6 @@ app.use(express.json());
 
 app.get("/health", (_req, res) => res.json({ status: "ok", time: new Date().toISOString() }));
 
-// Simple JSON-RPC over HTTP for Open WebUI Tools (thin wrapper)
 app.post("/tools/:name", async (req, res) => {
   const tool = tools.find((t) => t.name === req.params.name);
   if (!tool) return res.status(404).json({ error: `Unknown tool: ${req.params.name}` });
@@ -28,15 +27,19 @@ app.get("/tools", (_req, res) => {
   res.json({ tools: tools.map((t) => ({ name: t.name, description: t.description })) });
 });
 
-// SSE transport for MCP
-let sseTransport: SSEServerTransport | null = null;
+// SSE transport for MCP — per-session map to avoid race
+const sseTransports = new Map<string, SSEServerTransport>();
 app.get("/sse", async (req, res) => {
   const server = createMcpServer();
-  sseTransport = new SSEServerTransport("/messages", res);
-  await server.connect(sseTransport);
+  const transport = new SSEServerTransport("/messages", res);
+  sseTransports.set(transport.sessionId, transport);
+  res.on("close", () => sseTransports.delete(transport.sessionId));
+  await server.connect(transport);
 });
 app.post("/messages", async (req, res) => {
-  if (sseTransport) await sseTransport.handlePostMessage(req, res);
+  const sessionId = req.query.sessionId as string;
+  const transport = sessionId ? sseTransports.get(sessionId) : [...sseTransports.values()][0];
+  if (transport) await transport.handlePostMessage(req, res);
   else res.status(404).end();
 });
 

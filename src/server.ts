@@ -4,21 +4,22 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { tools } from "./tools.js";
 import { getDb } from "./db.js";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
 
 export function createMcpServer(): Server {
   const server = new Server({ name: "buddytrails-mcp", version: "0.1.0" }, { capabilities: { tools: {} } });
-
-  // Ensure DB initialized
   getDb();
-
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: tools.map((t) => ({
-      name: t.name,
-      description: t.description,
-      inputSchema: { type: "object" as const, properties: {}, additionalProperties: true },
-    })),
+    tools: tools.map((t) => {
+      let jsonSchema: any = { type: "object", properties: {}, additionalProperties: true };
+      try {
+        const { zodToJsonSchema } = require("zod-to-json-schema");
+        jsonSchema = zodToJsonSchema(t.inputSchema, { target: "jsonSchema7" });
+      } catch {}
+      return { name: t.name, description: t.description, inputSchema: jsonSchema };
+    }),
   }));
-
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const tool = tools.find((t) => t.name === req.params.name);
     if (!tool) throw new Error(`Unknown tool: ${req.params.name}`);
@@ -27,6 +28,5 @@ export function createMcpServer(): Server {
     const result = await tool.handler(parsed.data);
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   });
-
   return server;
 }

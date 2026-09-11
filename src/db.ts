@@ -1,6 +1,13 @@
 import path from "node:path";
+import { createRequire } from "node:module";
 
-export type Db = any;
+const require = createRequire(import.meta.url);
+
+export type Db = {
+  exec(sql: string): void;
+  prepare(sql: string): { run(...vals: any[]): any; get(...vals: any[]): any; all(...vals: any[]): any[] };
+  close(): void;
+};
 
 let _db: Db | null = null;
 
@@ -9,7 +16,7 @@ export function getDbPath(): string {
 }
 
 // Simple in-memory DB that mimics node:sqlite DatabaseSync for tests
-class MemDb {
+class MemDb implements Db {
   tables: Map<string, Map<string, any>> = new Map();
   constructor(_path: string) {
     for (const t of ["knowledge_entries","ideas","tasks","raw_task_items","reminders","pomodoro_sessions"]) {
@@ -17,12 +24,10 @@ class MemDb {
     }
   }
   exec(sql: string) {
-    // Handle CREATE TABLE etc — no-op for mem
-    if (sql.includes("CREATE TABLE")) return;
+    if (sql.includes("CREATE TABLE") || sql.includes("CREATE VIRTUAL TABLE")) return;
     if (sql.includes("DELETE FROM")) {
-      // Parse DELETE FROM table
-      const m = sql.match(/DELETE FROM\s+(\w+)/g);
-      if (m) for (const mm of m) {
+      const matches = sql.match(/DELETE FROM\s+(\w+)/g);
+      if (matches) for (const mm of matches) {
         const tbl = mm.split(/\s+/)[2].replace(/;/g,"");
         this.tables.get(tbl)?.clear();
       }
@@ -32,12 +37,10 @@ class MemDb {
     const self = this;
     return {
       run(...vals: any[]) {
-        // INSERT
         if (/INSERT INTO/i.test(sql)) {
           const m = sql.match(/INSERT INTO\s+(\w+)/i);
           const tbl = m![1];
           const map = self.tables.get(tbl)!;
-          // Extract columns
           const colsMatch = sql.match(/\(([^)]+)\)\s*VALUES/i);
           const cols = colsMatch ? colsMatch[1].split(",").map(s=>s.trim()) : [];
           const row: any = {};
@@ -50,11 +53,9 @@ class MemDb {
           const m = sql.match(/UPDATE\s+(\w+)/i);
           const tbl = m![1];
           const map = self.tables.get(tbl)!;
-          // Simple: last val is id
           const id = vals[vals.length-1];
           const row = map.get(id);
           if (!row) return { changes: 0 };
-          // Parse SET clause
           const setMatch = sql.match(/SET\s+(.+?)\s+WHERE/i);
           if (setMatch) {
             const sets = setMatch[1].split(",").map(s=>s.trim());
@@ -84,7 +85,7 @@ class MemDb {
         if (/SELECT raw_text FROM raw_task_items WHERE temp_id/i.test(sql)) {
           return self.tables.get("raw_task_items")?.get(vals[0]) || undefined;
         }
-        if (/SELECT \* FROM pomodoro_sessions WHERE task_id/i.test(sql)) {
+        if (/SELECT \* FROM pomodoro_sessions WHERE task_id/i.test(sql) && /ended_at IS NULL/i.test(sql)) {
           const all = [...(self.tables.get("pomodoro_sessions")?.values()||[])].filter((r:any)=>r.task_id===vals[0] && r.ended_at==null);
           return all[0];
         }
@@ -96,13 +97,11 @@ class MemDb {
         return undefined;
       },
       all(...vals: any[]) {
-        // Handle various SELECT patterns
         if (/FROM knowledge_entries/i.test(sql)) {
           let rows = [...(self.tables.get("knowledge_entries")?.values()||[])];
           if (/WHERE source = \?/i.test(sql) && vals.length>0) {
             const src = vals[0];
             rows = rows.filter((r:any)=>r.source===src);
-            // vals[0] consumed, remaining is limit
             const limit = vals[1] ?? vals[0];
             if (/LIMIT \?/i.test(sql) && typeof limit === 'number') rows = rows.slice(0, limit);
           } else if (/LIMIT \?/i.test(sql)) {
@@ -123,20 +122,21 @@ class MemDb {
         }
         if (/FROM tasks/i.test(sql)) {
           let rows = [...(self.tables.get("tasks")?.values()||[])];
-          // Handle WHERE clauses
           if (/status != 'done'/i.test(sql)) rows = rows.filter((r:any)=>r.status!=='done');
-          if (/status = \?/i.test(sql) && vals.includes("todo")) {
-            // generic filter — check first val
-          }
-          // For get_today_schedule: filter by deadline
-          if (/deadline = \?/i.test(sql)) {
-            // vals contain today
+          // Proper deadline filtering for get_today_schedule and due_soon
+          if (/deadline = \?/i.test(sql) && /priority = 3 AND deadline < \?/i.test(sql)) {
+            const today = vals[0];
+            const today2 = vals[1];
+            rows = rows.filter((r:any)=> r.deadline === today || (r.priority===3 && r.deadline && r.deadline < today2));
+          } else if (/deadline >= \? AND deadline <= \?/i.test(sql)) {
+            const from = vals[0], to = vals[1];
+            rows = rows.filter((r:any)=> r.deadline && r.deadline >= from && r.deadline <= to);
+          } else if (/deadline < date\('now'\)/i.test(sql)) {
+            const today = new Date().toISOString().slice(0,10);
+            rows = rows.filter((r:any)=> r.deadline && r.deadline < today);
+          } else if (/deadline = \?/i.test(sql) && !/priority/i.test(sql)) {
             const today = vals.find((v:any)=> typeof v==='string' && /^\d{4}-\d{2}-\d{2}$/.test(v));
-            if (today) {
-              // Keep rows where deadline == today OR (priority 3 and deadline < today) — simplified
-              // For scaffold test, just filter deadline == today
-              // Actually return all for now, let handler filter
-            }
+            if (today) rows = rows.filter((r:any)=> r.deadline === today);
           }
           if (/ORDER BY priority DESC/i.test(sql)) rows.sort((a:any,b:any)=> b.priority - a.priority || (a.deadline||"").localeCompare(b.deadline||""));
           if (/LIMIT \?/i.test(sql)) {
@@ -168,17 +168,16 @@ let useMem = process.env.VITEST === "true" || process.env.NODE_ENV === "test";
 export function openDb(dbPath?: string): Db {
   if (useMem) {
     const db = new MemDb(dbPath || ":memory:");
-    initSchema(db as any);
-    _db = db as any;
-    return db as any;
+    initSchema(db);
+    _db = db;
+    return db;
   }
-  // Prod: use node:sqlite
-  // Dynamic import to avoid vitest transform issue
-  const { DatabaseSync } = eval("require")("node:sqlite");
+  const { DatabaseSync } = require("node:sqlite");
   const p = dbPath || getDbPath();
   const db = new DatabaseSync(p);
-  initSchema(db as any);
-  return db as any;
+  initSchema(db);
+  _db = db as unknown as Db;
+  return db as unknown as Db;
 }
 
 export function getDb(): Db {
@@ -204,9 +203,55 @@ export function initSchema(db: Db): void {
       source TEXT,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS ideas (
+      id TEXT PRIMARY KEY,
+      text TEXT NOT NULL,
+      tags TEXT,
+      context TEXT,
+      embedding BLOB,
+      created_at TEXT NOT NULL,
+      promoted_task_id TEXT
+    );
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT,
+      priority INTEGER NOT NULL CHECK(priority BETWEEN 1 AND 3),
+      deadline TEXT,
+      estimate_minutes INTEGER,
+      status TEXT NOT NULL CHECK(status IN ('todo','doing','done')),
+      source TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS raw_task_items (
+      temp_id TEXT PRIMARY KEY,
+      raw_text TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS reminders (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      at TEXT NOT NULL,
+      channel TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS pomodoro_sessions (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      ended_at TEXT,
+      duration_minutes INTEGER
+    );
   `);
+  try {
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_vec USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[384]);
+      CREATE VIRTUAL TABLE IF NOT EXISTS ideas_vec USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[384]);
+    `);
+  } catch {}
 }
 
 export function resetDb(db: Db): void {
   db.exec(`DELETE FROM knowledge_entries; DELETE FROM ideas; DELETE FROM tasks; DELETE FROM raw_task_items; DELETE FROM reminders; DELETE FROM pomodoro_sessions;`);
+  try { db.exec(`DELETE FROM knowledge_vec; DELETE FROM ideas_vec;`); } catch {}
 }

@@ -1,4 +1,4 @@
-// Lightweight deterministic embedding stub for scaffold.
+// Lightweight deterministic embedding stub for scaffold — scaffold only: keyword boost in tools.ts compensates for hash embed; remove in #3 when real model lands.
 // Real model (all-MiniLM-L6-v2 / bge-small) wired in ticket 02.
 // Returns 384-dim float array deterministically from text hash.
 

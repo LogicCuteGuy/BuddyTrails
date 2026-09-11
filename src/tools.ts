@@ -384,8 +384,9 @@ export const tools: ToolDef[] = [
         blocks.push({ taskId: t.id, title: t.title, priority: t.priority, start: `${String(Math.floor(blockStart / 60)).padStart(2, "0")}:${String(blockStart % 60).padStart(2, "0")}`, end: `${String(Math.floor(blockEnd / 60)).padStart(2, "0")}:${String(blockEnd % 60).padStart(2, "0")}`, estimate_minutes: est });
         cursor = blockEnd + 10; // 10 min break
       }
-      const overflow = total > windowMin;
-      return { date: today, workingWindow: { start, end }, tasks: tasks.length, total_minutes: total, window_minutes: windowMin, overflow, warning: overflow ? `Overflow by ${total - windowMin} minutes` : null, blocks };
+      const totalWithBreaks = blocks.length > 0 ? total + 10 * (blocks.length - 1) : 0;
+      const overflow = totalWithBreaks > windowMin;
+      return { date: today, workingWindow: { start, end }, tasks: tasks.length, total_minutes: total, total_with_breaks: totalWithBreaks, window_minutes: windowMin, overflow, warning: overflow ? `Overflow by ${totalWithBreaks - windowMin} minutes` : null, blocks };
     },
   },
   {
