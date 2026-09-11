@@ -1,0 +1,26 @@
+{
+  "description": "Auto-store knowledge on turn — injects reminder to call knowledge.ingest / hook.on_turn",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '[knowledge-hook] Remember to store notable facts via knowledge.ingest or hook.on_turn (respects conversation opt-out, shared Knowledge DB)'"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '[knowledge-hook] Knowledge Hook DB active — use knowledge.ingest { text, source, tags } or hook.on_turn { text, role, conversation_id } to store knowledge (shared, created_by audit)'"
+          }
+        ]
+      }
+    ]
+  }
+}
