@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { Client, GatewayIntentBits, Events, SlashCommandBuilder, REST, Routes, ApplicationIntegrationType, InteractionContextType } from "discord.js";
 import { getDb } from "../db.js";
 
