@@ -177,6 +177,49 @@ function detectCalendarBlock(text: string): { label: string; start_date: string;
   return { label, start_date, end_date, ...(start_time ? { start_time, end_time } : {}), effect };
 }
 
+// Automation helpers (dynamic RRULE-based Discord notifications)
+function parseRRule(rrule: string): { freq: string; byday?: string[]; interval?: number } | null {
+  const parts = rrule.split(";").map((p) => p.trim());
+  let freq: string | null = null;
+  let byday: string[] | undefined;
+  let interval: number | undefined;
+  for (const part of parts) {
+    const [k, v] = part.split("=").map((s) => s.trim());
+    if (!k || !v) continue;
+    const ku = k.toUpperCase();
+    if (ku === "FREQ") freq = v.toUpperCase();
+    else if (ku === "BYDAY") byday = v.split(",").map((d) => d.trim().toUpperCase()).filter(Boolean);
+    else if (ku === "INTERVAL") interval = parseInt(v, 10) || 1;
+  }
+  if (!freq || !["DAILY", "WEEKLY"].includes(freq)) return null;
+  if (byday) {
+    const valid = new Set(["MO", "TU", "WE", "TH", "FR", "SA", "SU"]);
+    for (const d of byday) if (!valid.has(d)) return null;
+  }
+  return { freq, byday, interval };
+}
+function parseDtstart(dtstart: string): { hour: number; minute: number; dateStr: string } | null {
+  // DTSTART:20260913T083000 or 2026-09-13T08:30:00 or 08:30
+  const m1 = dtstart.match(/DTSTART:(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?/);
+  if (m1) {
+    return { hour: parseInt(m1[4], 10), minute: parseInt(m1[5], 10), dateStr: `${m1[1]}-${m1[2]}-${m1[3]}` };
+  }
+  const m2 = dtstart.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (m2) return { hour: parseInt(m2[4], 10), minute: parseInt(m2[5], 10), dateStr: `${m2[1]}-${m2[2]}-${m2[3]}` };
+  const m3 = dtstart.match(/^(\d{1,2}):(\d{2})$/);
+  if (m3) return { hour: parseInt(m3[1], 10), minute: parseInt(m3[2], 10), dateStr: new Date().toISOString().slice(0, 10) };
+  return null;
+}
+function validateAutomation(input: { name: string; message: string; rrule: string; dtstart: string }): string | null {
+  if (!input.name || input.name.trim().length === 0) return "name is required";
+  if (input.name.trim().length > 100) return "name must be 1..100 chars";
+  if (!input.message || input.message.trim().length === 0) return "message is required";
+  if (input.message.length > 2000) return "message max 2000 chars";
+  if (!parseRRule(input.rrule)) return "rrule must be FREQ=DAILY or FREQ=WEEKLY with optional BYDAY/INTERVAL (e.g. FREQ=DAILY or FREQ=WEEKLY;BYDAY=MO,WE)";
+  if (!parseDtstart(input.dtstart)) return "dtstart must be DTSTART:YYYYMMDDTHHMMSS or YYYY-MM-DDTHH:mm or HH:mm";
+  return null;
+}
+
 export const tools: ToolDef[] = [
   // knowledge.*
   {
@@ -861,6 +904,93 @@ export const tools: ToolDef[] = [
       if (userId === "anonymous") throw new Error("Missing X-User-Id — calendar requires authentication");
       const db = getDb();
       db.prepare(`DELETE FROM calendar_blocks WHERE id = ? AND user_id = ?`).run(id, userId);
+      return { deleted: id };
+    },
+  },
+  // automations — dynamic RRULE-based Discord notifications
+  {
+    name: "automation.create",
+    description: "Create a dynamic automation (RRULE schedule + custom message) for Discord DM notifications",
+    inputSchema: z.object({
+      name: z.string().trim().min(1).max(100),
+      message: z.string().min(1).max(2000),
+      rrule: z.string().min(1),
+      dtstart: z.string().min(1),
+    }),
+    handler: async ({ name, message, rrule, dtstart }) => {
+      const userId = getCurrentUserId();
+      if (userId === "anonymous") throw new Error("Missing X-User-Id — automation requires authentication");
+      const err = validateAutomation({ name, message, rrule, dtstart });
+      if (err) throw new Error(err);
+      const db = getDb();
+      const id = randomUUID();
+      const now = nowIso();
+      db.prepare(`INSERT INTO automations (id, user_id, name, message, rrule, dtstart, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`).run(id, userId, name.trim(), message, rrule, dtstart, now, now);
+      return { id, name: name.trim(), message, rrule, dtstart, enabled: true };
+    },
+  },
+  {
+    name: "automation.list",
+    description: "List my automations",
+    inputSchema: z.object({}),
+    handler: async () => {
+      const userId = getCurrentUserId();
+      if (userId === "anonymous") throw new Error("Missing X-User-Id — automation requires authentication");
+      const db = getDb();
+      const rows = db.prepare(`SELECT * FROM automations WHERE user_id = ? ORDER BY created_at DESC`).all(userId) as any[];
+      return { automations: rows.map((r) => ({ ...r, enabled: !!r.enabled })) };
+    },
+  },
+  {
+    name: "automation.update",
+    description: "Update an automation (name, message, rrule, dtstart, enabled)",
+    inputSchema: z.object({
+      id: z.string().min(1),
+      name: z.string().trim().min(1).max(100).optional(),
+      message: z.string().min(1).max(2000).optional(),
+      rrule: z.string().min(1).optional(),
+      dtstart: z.string().min(1).optional(),
+      enabled: z.boolean().optional(),
+    }),
+    handler: async ({ id, name, message, rrule, dtstart, enabled }) => {
+      const userId = getCurrentUserId();
+      if (userId === "anonymous") throw new Error("Missing X-User-Id — automation requires authentication");
+      const db = getDb();
+      const existing = db.prepare(`SELECT * FROM automations WHERE id = ? AND user_id = ?`).get(id, userId) as any;
+      if (!existing) throw new Error(`Automation not found: ${id}`);
+      const next = {
+        name: name ?? existing.name,
+        message: message ?? existing.message,
+        rrule: rrule ?? existing.rrule,
+        dtstart: dtstart ?? existing.dtstart,
+      };
+      const err = validateAutomation(next);
+      if (err) throw new Error(err);
+      const sets: string[] = [];
+      const vals: any[] = [];
+      if (name !== undefined) { sets.push("name = ?"); vals.push(name.trim()); }
+      if (message !== undefined) { sets.push("message = ?"); vals.push(message); }
+      if (rrule !== undefined) { sets.push("rrule = ?"); vals.push(rrule); }
+      if (dtstart !== undefined) { sets.push("dtstart = ?"); vals.push(dtstart); }
+      if (enabled !== undefined) { sets.push("enabled = ?"); vals.push(enabled ? 1 : 0); }
+      if (sets.length === 0) throw new Error("No fields to update");
+      sets.push("updated_at = ?");
+      vals.push(nowIso());
+      vals.push(id, userId);
+      db.prepare(`UPDATE automations SET ${sets.join(", ")} WHERE id = ? AND user_id = ?`).run(...vals);
+      const updated = db.prepare(`SELECT * FROM automations WHERE id = ? AND user_id = ?`).get(id, userId) as any;
+      return { ...updated, enabled: !!updated.enabled };
+    },
+  },
+  {
+    name: "automation.delete",
+    description: "Delete an automation",
+    inputSchema: z.object({ id: z.string().min(1) }),
+    handler: async ({ id }) => {
+      const userId = getCurrentUserId();
+      if (userId === "anonymous") throw new Error("Missing X-User-Id — automation requires authentication");
+      const db = getDb();
+      db.prepare(`DELETE FROM automations WHERE id = ? AND user_id = ?`).run(id, userId);
       return { deleted: id };
     },
   },

@@ -104,6 +104,73 @@ client.once(Events.ClientReady, async () => {
     }, delay);
   }
   scheduleDailyPush();
+
+  // Dynamic automations — per-user RRULE schedules with custom messages
+  function parseRRuleForBot(rrule: string): { freq: string; byday?: string[] } | null {
+    const parts = rrule.split(";").map((p) => p.trim());
+    let freq: string | null = null;
+    let byday: string[] | undefined;
+    for (const part of parts) {
+      const [k, v] = part.split("=").map((s) => s.trim());
+      if (!k || !v) continue;
+      if (k.toUpperCase() === "FREQ") freq = v.toUpperCase();
+      else if (k.toUpperCase() === "BYDAY") byday = v.split(",").map((d) => d.trim().toUpperCase()).filter(Boolean);
+    }
+    if (!freq || !["DAILY", "WEEKLY"].includes(freq)) return null;
+    return { freq, byday };
+  }
+  function parseDtstartForBot(dtstart: string): { hour: number; minute: number } | null {
+    const m1 = dtstart.match(/DTSTART:(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})/);
+    if (m1) return { hour: parseInt(m1[4], 10), minute: parseInt(m1[5], 10) };
+    const m2 = dtstart.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+    if (m2) return { hour: parseInt(m2[4], 10), minute: parseInt(m2[5], 10) };
+    const m3 = dtstart.match(/^(\d{1,2}):(\d{2})$/);
+    if (m3) return { hour: parseInt(m3[1], 10), minute: parseInt(m3[2], 10) };
+    return null;
+  }
+  function shouldFireToday(rrule: string, dtstart: string): boolean {
+    const rule = parseRRuleForBot(rrule);
+    const dt = parseDtstartForBot(dtstart);
+    if (!rule || !dt) return false;
+    if (rule.freq === "DAILY") return true;
+    if (rule.freq === "WEEKLY" && rule.byday) {
+      const dayMap: Record<number, string> = { 0: "SU", 1: "MO", 2: "TU", 3: "WE", 4: "TH", 5: "FR", 6: "SA" };
+      // Use Asia/Bangkok day
+      const now = new Date();
+      const bkk = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+      const bkkDay = dayMap[bkk.getUTCDay()];
+      return rule.byday.includes(bkkDay);
+    }
+    return false;
+  }
+  // Check automations every minute
+  setInterval(async () => {
+    try {
+      const now = new Date();
+      const bkk = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+      const bkkHour = bkk.getUTCHours();
+      const bkkMin = bkk.getUTCMinutes();
+      if (now.getUTCSeconds() !== 0) return; // only fire on minute boundary (approx, we check every 60s so ~once per minute)
+      const db = getDb();
+      const automations = db.prepare(`SELECT * FROM automations WHERE enabled = 1`).all() as any[];
+      if (automations.length === 0) return;
+      const links = db.prepare(`SELECT openwebui_user_id, discord_user_id FROM user_discord_link`).all() as any[];
+      const linkMap = new Map(links.map((l: any) => [l.openwebui_user_id, l.discord_user_id]));
+      for (const auto of automations) {
+        const dt = parseDtstartForBot(auto.dtstart);
+        if (!dt) continue;
+        if (dt.hour !== bkkHour || dt.minute !== bkkMin) continue;
+        if (!shouldFireToday(auto.rrule, auto.dtstart)) continue;
+        const discordId = linkMap.get(auto.user_id);
+        if (!discordId) continue;
+        try {
+          const user = await client.users.fetch(discordId);
+          await user.send(auto.message);
+          console.error(`Automation fired: ${auto.name} -> ${auto.user_id}`);
+        } catch (e) { console.error(`Automation DM failed: ${auto.name}`, e); }
+      }
+    } catch (e) { console.error("Automation scheduler error", e); }
+  }, 60 * 1000);
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
