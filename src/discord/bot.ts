@@ -46,6 +46,64 @@ client.once(Events.ClientReady, async () => {
       }
     } catch (e) { console.error("Scheduler error", e); }
   }, 60 * 60 * 1000);
+
+  // Daily push at 09:00 Asia/Bangkok — brief.daily + schedule to linked users
+  const DAILY_HOUR = parseInt(process.env.DAILY_PUSH_HOUR ?? "9", 10);
+  const DAILY_TZ_OFFSET = 7 * 60; // Asia/Bangkok UTC+7 in minutes
+  function msUntilNextDaily(): number {
+    const now = new Date();
+    const utcMin = now.getUTCHours() * 60 + now.getUTCMinutes();
+    const bkkMin = (utcMin + DAILY_TZ_OFFSET) % 1440;
+    const targetMin = DAILY_HOUR * 60;
+    let diffMin = targetMin - bkkMin;
+    if (diffMin <= 0) diffMin += 1440;
+    const sec = now.getUTCSeconds();
+    const ms = now.getUTCMilliseconds();
+    return diffMin * 60 * 1000 - sec * 1000 - ms;
+  }
+  async function sendDailyPush() {
+    try {
+      const db = getDb();
+      const links = db.prepare(`SELECT openwebui_user_id, discord_user_id FROM user_discord_link`).all() as any[];
+      if (links.length === 0) return;
+      for (const link of links) {
+        try {
+          const brief = tools.find(t => t.name === "brief.daily")!;
+          const sched = tools.find(t => t.name === "task.get_today_schedule")!;
+          const b = await runWithUser(link.openwebui_user_id, () => brief.handler({})) as any;
+          const s = await runWithUser(link.openwebui_user_id, () => sched.handler({})) as any;
+          const tasks = b.tasks ?? [];
+          const blocks: any[] = s.blocks ?? [];
+          if (tasks.length === 0 && blocks.length === 0 && !s.activeBlock) continue;
+          let msg = `☀️ **Daily Brief — ${b.date}**\n`;
+          if (s.activeBlock) msg += `📌 ${s.activeBlock.label} (${s.activeBlock.start_date}–${s.activeBlock.end_date})${s.warning ? ` — ${s.warning}` : ""}\n`;
+          else if (s.warning) msg += `⚠️ ${s.warning}\n`;
+          if (blocks.length > 0) {
+            msg += `\n**Schedule (${s.workingWindow.start}–${s.workingWindow.end}):**\n`;
+            for (const bl of blocks) msg += `• ${bl.start}–${bl.end} ${bl.title} ${"★".repeat(bl.priority)}\n`;
+            if (s.overflow) msg += `⚠️ Overflow by ${s.total_with_breaks - s.window_minutes} min\n`;
+          } else if (tasks.length > 0) {
+            msg += `\n**Tasks today:**\n`;
+            for (const t of tasks) msg += `• ${t.title} ${"★".repeat(t.priority)}${t.deadline ? ` (due ${t.deadline})` : ""}\n`;
+          } else {
+            msg += `\nNo tasks today. Enjoy your day!`;
+          }
+          if (b.topIdeas?.length) msg += `\n💡 Ideas: ${b.topIdeas.map((i: any) => i.text.slice(0, 40)).join(" | ")}`;
+          const user = await client.users.fetch(link.discord_user_id);
+          await user.send(msg);
+        } catch (e) { console.error(`Daily push failed for ${link.openwebui_user_id}`, e); }
+      }
+    } catch (e) { console.error("Daily push error", e); }
+  }
+  function scheduleDailyPush() {
+    const delay = msUntilNextDaily();
+    console.error(`Daily push next in ${Math.round(delay / 60000)} min (09:00 Asia/Bangkok)`);
+    setTimeout(async () => {
+      await sendDailyPush();
+      setInterval(sendDailyPush, 24 * 60 * 60 * 1000);
+    }, delay);
+  }
+  scheduleDailyPush();
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
