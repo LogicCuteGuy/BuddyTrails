@@ -1,12 +1,13 @@
 # BuddyTrails MCP
 
-Single local MCP server with three namespaces — **Knowledge Hook DB**, **Have-Idea**, and **Work Task** — serving GitHub Copilot (`stdio`), Open WebUI (`HTTP/SSE`), and a Discord bot from one SQLite file.
+Single local MCP server with four namespaces — **Knowledge Hook DB**, **Have-Idea**, **Work Task**, and **Calendar Block** — serving GitHub Copilot (`stdio`), Open WebUI (`HTTP/SSE`), and a Discord bot from one SQLite file.
 
 ## Features
 
 - **Knowledge Hook DB** — auto-hooks every user↔AI turn, digests on write (embedding + summary + tags), stores raw + vector for semantic search
 - **Have-Idea** — lightweight idea capture with semantic `suggest` when stuck
 - **Work Task** — daily tasks with 3★ priority, deadline, estimate; Raw Task Data two-step enrichment (paste titles → assign priority/estimate); time-blocked Work Schedule + Suggest Next
+- **Calendar Block** — flexible life period (e.g. school break, exam week, camp, busy week) with free-text `label` + `start_date`/`end_date` + optional `start_time`/`end_time` + `effect {skip, window, boost_tags}`; `task.get_today_schedule`/`brief.daily` respect it (`skip` wins, timed intervals unioned and subtracted, `window` override, `boost_tags` tie-breaker after priority), `hook.on_turn` proposes blocks from natural language with confirmation
 - **Auto-skills** — `knowledge.summarize`/`export`/`retag`, `idea.brainstorm`/`cluster`/`refine`, `task.breakdown`/`pomodoro`/`time_log`, `brief.daily`/`weekly`, `search.all` — all via function-calling (slash aliases remain)
 - **Discord bot** — `DISCORD_TOKEN`, guild-only `/buddytrails-verify` (code flow), hourly 3★ DM per linked user
 - **Multi-account** — Open WebUI Custom Headers (`X-User-Id: {{USER_ID}}`/`{{USER_EMAIL}}`), Knowledge shared, Ideas/Tasks private per user, `stdio` = `local`; link via `link.create` (Open WebUI) → `/buddytrails-verify` (Discord)
@@ -73,10 +74,11 @@ DISCORD_TOKEN=... node dist/discord/bot.js
 | `knowledge.*` | `ingest`, `search`, `get`, `delete`, `summarize`, `export`, `retag` |
 | `idea.*` | `capture`, `suggest`, `list`, `delete`, `promote_to_task`, `brainstorm`, `cluster`, `refine` |
 | `task.*` | `create`, `update`, `list`, `delete`, `ingest_raw`, `enrich_raw`, `get_today_schedule`, `suggest_next`, `breakdown`, `pomodoro`, `time_log`, `remind`, `due_soon` |
+| `calendar.*` | `set`, `list`, `delete` |
 | `brief.*` | `daily`, `weekly` |
 | `search.*` | `all` |
 | `conversation.*` | `set_opt_out`, `get_opt_out` |
-| `hook.*` | `on_turn` |
+| `hook.*` | `on_turn` (auto-ingest + Calendar Block detection with confirmation) |
 | `link.*` | `create` (6-digit code, 10 min, single-use) |
 | `health` | — |
 
@@ -86,14 +88,14 @@ All tools validate via `zod` and return structured JSON. See `src/tools.ts` for 
 
 ```bash
 npm run typecheck   # tsc --noEmit
-npm test            # vitest run (31 tests)
+npm test            # vitest run (72 tests)
 npm run dev:stdio   # tsx stdio
 npm run dev:http    # tsx http
 ```
 
 ## Storage
 
-Single file `buddytrails.db` (SQLite, `BUDDYTRAILS_DB` env). Tables: `knowledge_entries` (shared, `created_by` audit), `ideas`/`tasks`/`raw_task_items`/`reminders`/`pomodoro_sessions`/`conversation_settings` (private per `user_id`), `discord_settings`, `user_discord_link`, `link_codes` (one-time 6-digit, 10 min). Existing DBs auto-migrated. Local-only, no cloud sync.
+Single file `buddytrails.db` (SQLite, `BUDDYTRAILS_DB` env). Tables: `knowledge_entries` (shared, `created_by` audit), `ideas`/`tasks`/`raw_task_items`/`reminders`/`pomodoro_sessions`/`conversation_settings`/`calendar_blocks` (private per `user_id`), `discord_settings`, `user_discord_link`, `link_codes` (one-time 6-digit, 10 min). `calendar_blocks` stores `label`, `start_date`/`end_date`, `start_time`/`end_time`, `effect JSON {skip, window, boost_tags}` with indexes on `(user_id)` and `(user_id, start_date, end_date)`. Existing DBs auto-migrated. Local-only, no cloud sync.
 
 ## Setup Guide
 
