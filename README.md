@@ -9,7 +9,7 @@ Single local MCP server with four namespaces — **Knowledge Hook DB**, **Have-I
 - **Work Task** — daily tasks with 3★ priority, deadline, estimate; Raw Task Data two-step enrichment (paste titles → assign priority/estimate); time-blocked Work Schedule + Suggest Next
 - **Calendar Block** — flexible life period (e.g. school break, exam week, camp, busy week) with free-text `label` + `start_date`/`end_date` + optional `start_time`/`end_time` + `effect {skip, window, boost_tags}`; `task.get_today_schedule`/`brief.daily` respect it (`skip` wins, timed intervals unioned and subtracted, `window` override, `boost_tags` tie-breaker after priority), `hook.on_turn` proposes blocks from natural language with confirmation
 - **Auto-skills** — `knowledge.summarize`/`export`/`retag`, `idea.brainstorm`/`cluster`/`refine`, `task.breakdown`/`pomodoro`/`time_log`, `brief.daily`/`weekly`, `search.all` — all via function-calling (slash aliases remain)
-- **Discord bot** — `DISCORD_TOKEN`, guild-only `/buddytrails-verify` (code flow), hourly 3★ DM + daily 09:00 Asia/Bangkok push (`brief.daily` + schedule) per linked user (`DAILY_PUSH_HOUR` env to override)
+- **Discord bot** — `DISCORD_TOKEN`, guild-only `/buddytrails-verify` (code flow); notifications via AI chat bot (`notify.send` to DM or channel)
 - **Multi-account** — Open WebUI Custom Headers (`X-User-Id: {{USER_ID}}`/`{{USER_EMAIL}}`), Knowledge shared, Ideas/Tasks private per user, `stdio` = `local`; link via `link.create` (Open WebUI) → `/buddytrails-verify` (Discord)
 
 ## Requirements

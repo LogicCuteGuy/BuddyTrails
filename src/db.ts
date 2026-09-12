@@ -19,7 +19,7 @@ export function getDbPath(): string {
 class MemDb implements Db {
   tables: Map<string, Map<string, any>> = new Map();
   constructor(_path: string) {
-    for (const t of ["knowledge_entries","ideas","tasks","raw_task_items","reminders","pomodoro_sessions","conversation_settings","discord_settings","user_discord_link","link_codes","calendar_blocks","automations"]) {
+    for (const t of ["knowledge_entries","ideas","tasks","raw_task_items","reminders","pomodoro_sessions","conversation_settings","discord_settings","user_discord_link","link_codes","calendar_blocks"]) {
       this.tables.set(t, new Map());
     }
   }
@@ -322,19 +322,6 @@ class MemDb implements Db {
           else if (/ORDER BY created_at DESC/i.test(sql)) rows.sort((a:any,b:any)=> b.created_at.localeCompare(a.created_at));
           return rows;
         }
-        if (/FROM automations/i.test(sql)) {
-          let rows = [...(self.tables.get("automations")?.values()||[])];
-          if (/user_id = \?/i.test(sql)) {
-            const userId = vals[0];
-            rows = rows.filter((r:any)=>r.user_id===userId);
-            if (/enabled = 1/i.test(sql)) rows = rows.filter((r:any)=>r.enabled===1 || r.enabled===true);
-          } else if (/enabled = 1/i.test(sql)) {
-            rows = rows.filter((r:any)=>r.enabled===1 || r.enabled===true);
-          }
-          if (/ORDER BY created_at DESC/i.test(sql)) rows.sort((a:any,b:any)=> b.created_at.localeCompare(a.created_at));
-          else if (/ORDER BY name ASC/i.test(sql)) rows.sort((a:any,b:any)=> a.name.localeCompare(b.name));
-          return rows;
-        }
         return [];
       }
     };
@@ -463,17 +450,6 @@ export function initSchema(db: Db): void {
       effect TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS automations (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      message TEXT NOT NULL,
-      rrule TEXT NOT NULL,
-      dtstart TEXT NOT NULL,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
   `);
   // Migrations for existing DBs (ignore if column already exists)
   for (const sql of [
@@ -524,8 +500,6 @@ export function initSchema(db: Db): void {
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_link_codes_expires ON link_codes(expires_at)`); } catch {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_calendar_blocks_user ON calendar_blocks(user_id)`); } catch {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_calendar_blocks_user_dates ON calendar_blocks(user_id, start_date, end_date)`); } catch {}
-  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_automations_user ON automations(user_id)`); } catch {}
-  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_automations_enabled ON automations(enabled)`); } catch {}
   try {
     db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_vec USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[384]);
@@ -535,6 +509,6 @@ export function initSchema(db: Db): void {
 }
 
 export function resetDb(db: Db): void {
-  db.exec(`DELETE FROM knowledge_entries; DELETE FROM ideas; DELETE FROM tasks; DELETE FROM raw_task_items; DELETE FROM reminders; DELETE FROM pomodoro_sessions; DELETE FROM conversation_settings; DELETE FROM discord_settings; DELETE FROM user_discord_link; DELETE FROM link_codes; DELETE FROM calendar_blocks; DELETE FROM automations;`);
+  db.exec(`DELETE FROM knowledge_entries; DELETE FROM ideas; DELETE FROM tasks; DELETE FROM raw_task_items; DELETE FROM reminders; DELETE FROM pomodoro_sessions; DELETE FROM conversation_settings; DELETE FROM discord_settings; DELETE FROM user_discord_link; DELETE FROM link_codes; DELETE FROM calendar_blocks;`);
   try { db.exec(`DELETE FROM knowledge_vec; DELETE FROM ideas_vec;`); } catch {}
 }
