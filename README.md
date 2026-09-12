@@ -89,14 +89,14 @@ All tools validate via `zod` and return structured JSON. See `src/tools.ts` for 
 
 ```bash
 npm run typecheck   # tsc --noEmit
-npm test            # vitest run (72 tests)
+npm test            # vitest run (79 tests)
 npm run dev:stdio   # tsx stdio
 npm run dev:http    # tsx http
 ```
 
 ## Storage
 
-Single file `buddytrails.db` (SQLite, `BUDDYTRAILS_DB` env). Tables: `knowledge_entries` (shared, `created_by` audit), `ideas`/`tasks`/`raw_task_items`/`reminders`/`pomodoro_sessions`/`conversation_settings`/`calendar_blocks` (private per `user_id`), `discord_settings`, `user_discord_link`, `link_codes` (one-time 6-digit, 10 min). `calendar_blocks` stores `label`, `start_date`/`end_date`, `start_time`/`end_time`, `effect JSON {skip, window, boost_tags}` with indexes on `(user_id)` and `(user_id, start_date, end_date)`. Existing DBs auto-migrated. Local-only, no cloud sync.
+Single file `buddytrails.db` (SQLite, `BUDDYTRAILS_DB` env). Tables: `knowledge_entries` (shared, `created_by` audit), `ideas`/`tasks`/`raw_task_items`/`reminders`/`pomodoro_sessions`/`conversation_settings`/`calendar_blocks`/`automations` (private per `user_id`), `discord_settings`, `user_discord_link`, `link_codes` (one-time 6-digit, 10 min). `calendar_blocks` stores `label`, `start_date`/`end_date`, `start_time`/`end_time`, `effect JSON {skip, window, boost_tags}` with indexes on `(user_id)` and `(user_id, start_date, end_date)`. `automations` stores `name`, `message`, `rrule`, `dtstart`, `enabled` with indexes on `(user_id)` and `(enabled)`. Existing DBs auto-migrated. Local-only, no cloud sync.
 
 ## Setup Guide
 

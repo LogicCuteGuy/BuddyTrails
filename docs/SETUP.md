@@ -14,7 +14,7 @@ cd BuddyTrails
 npm install
 npm run build
 npm run typecheck   # should be clean
-npm test            # 31 tests
+npm test            # 79 tests
 ```
 
 ## 3. Environment
@@ -29,6 +29,7 @@ cp .env.example .env
 | `BUDDYTRAILS_DB` | `./buddytrails.db` | Single SQLite file for all data |
 | `PORT` | `3000` | HTTP/SSE port |
 | `DISCORD_TOKEN` | — | Required only for Discord bot |
+| `DAILY_PUSH_HOUR` | `9` | Hour (0-23) for daily brief push in Asia/Bangkok |
 
 No `DISCORD_GUILD_ID`/`DISCORD_CHANNEL_ID` — Discord is guild-only via `/buddytrails-verify` (stored in `user_discord_link` + `link_codes`).
 
@@ -89,16 +90,20 @@ DISCORD_TOKEN=... node dist/discord/bot.js
 
 - **Install:** Discord Developer Portal → Installation → Default Install Settings → **Guild Install** only (`bot` + `applications.commands`, `Guild` context). Invite to your guild.
 - **Link:** In Open WebUI run the `link.create` tool → 6-digit code (10 min, single-use). Then in a **guild channel** run `/buddytrails-verify code:<code>` → creates `openwebui_user_id → discord_user_id`.
-- **Notifications:** Hourly 3★ `due_soon` DMs to linked users (via `user_discord_link`); verify also sends a DM confirmation. No other slash commands; no User Install.
+- **Notifications:** Hourly 3★ `due_soon` DMs + daily 09:00 Asia/Bangkok push (`brief.daily` + schedule) to linked users (via `user_discord_link`); verify also sends a DM confirmation. No other slash commands; no User Install.
+- **Dynamic automations:** Per-user RRULE schedules with custom messages → Discord DM. Tools: `automation.create {name, message, rrule, dtstart}` / `automation.list` / `automation.update {id, name?, message?, rrule?, dtstart?, enabled?}` / `automation.delete {id}`. Examples:
+  - Daily 08:30: `rrule: "FREQ=DAILY"`, `dtstart: "DTSTART:20260913T083000"`
+  - Weekly Monday 16:30: `rrule: "FREQ=WEEKLY;BYDAY=MO"`, `dtstart: "DTSTART:20260915T163000"`
+  - `dtstart` also accepts `YYYY-MM-DDTHH:mm` or `HH:mm`. `rrule` supports `BYDAY` (MO,TU,WE,TH,FR,SA,SU) and `INTERVAL`. Bot checks every minute in Asia/Bangkok time.
 
 ## 7. Verify
 
 ```bash
 npm run build
-npm test   # 31 tests, fileParallelism:false for shared DB
+npm test   # 79 tests, fileParallelism:false for shared DB
 ```
 
-DB file `buddytrails.db` is created on first run. Single file, no cloud sync. Existing DBs are migrated automatically (adds `user_id`, `created_by`, `user_discord_link`, `link_codes`, fixes `conversation_settings` PK).
+DB file `buddytrails.db` is created on first run. Single file, no cloud sync. Existing DBs are migrated automatically (adds `user_id`, `created_by`, `user_discord_link`, `link_codes`, `calendar_blocks`, `automations`, fixes `conversation_settings` PK).
 
 ## 8. Troubleshooting
 
